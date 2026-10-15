@@ -4,6 +4,7 @@ import type { ActiveCell, AssemblyInfo, ChainInfo, OtherChainsMode, RangeRow, St
 export interface AppState {
   stage: Stage;
   pdbId: string;
+  biounitIndex: number;
   assemblies: AssemblyInfo[];
   assemblyId: string;
   structureReady: boolean;
@@ -13,11 +14,13 @@ export interface AppState {
   rows: RangeRow[];
   activeCell: ActiveCell | null;
   otherChainsMode: OtherChainsMode;
+  showSidechainSticks: boolean;
 }
 
 export const appState = $state<AppState>({
   stage: 1,
   pdbId: '',
+  biounitIndex: 1,
   assemblies: [],
   assemblyId: '',
   structureReady: false,
@@ -27,11 +30,13 @@ export const appState = $state<AppState>({
   rows: [],
   activeCell: null,
   otherChainsMode: 'transparent',
+  showSidechainSticks: false,
 });
 
 export function enterStage2(): void {
   appState.rows = [createRangeRow()];
   appState.activeCell = null;
+  appState.showSidechainSticks = false;
   appState.stage = 2;
 }
 
@@ -39,5 +44,6 @@ export function returnToStage1(): void {
   appState.rows = [];
   appState.activeCell = null;
   appState.chains = [];
+  appState.showSidechainSticks = false;
   appState.stage = 1;
 }

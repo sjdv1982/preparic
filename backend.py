@@ -1,0 +1,98 @@
+"""Run Preparic's writable PDB and biounit shares during development.
+
+Use ``python -i backend.py`` to leave the context available in an interactive
+prompt; call ``close_context()`` when you are done.
+"""
+
+import json
+import os
+import sys
+from pathlib import Path
+
+import seamless
+from seamless import Cell
+from seamless_workflow import Context, shareserver
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+MOUNT_DIRECTORY = PROJECT_ROOT / "deployment-mounts"
+PDBCODE_PATH = MOUNT_DIRECTORY / "pdbcode.txt"
+BIOUNIT_PATH = MOUNT_DIRECTORY / "biounit.json"
+
+
+def _initial_pdb_code(path: Path) -> str:
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8").strip().upper()
+
+
+def _initial_biounit_index(path: Path) -> int:
+    if not path.exists():
+        return 1
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return 1
+    return value if type(value) is int and value >= 1 else 1
+
+
+def build_context() -> Context:
+    """Build the live context backing the Vite development proxy."""
+    global ctx
+    if shareserver.url is None:
+        configured_host = shareserver.host
+        host = os.environ.get("SEAMLESS_SHARE_HOST")
+        if host is None:
+            host = "127.0.0.1" if configured_host == "0.0.0.0" else configured_host
+        port = int(os.environ.get("SEAMLESS_SHARE_PORT", shareserver.port))
+        shareserver.configure(host=host, port=port)
+
+    MOUNT_DIRECTORY.mkdir(parents=True, exist_ok=True)
+    context = Context()
+    try:
+        context.shares.namespace = "preparic"
+
+        context.pdbcode = Cell(celltype="text")
+        context.pdbcode.set(_initial_pdb_code(PDBCODE_PATH))
+        context.pdbcode.mount(PDBCODE_PATH, mode="rw", authority="cell")
+
+        context.biounit = Cell(celltype="plain")
+        context.biounit.set(_initial_biounit_index(BIOUNIT_PATH))
+        context.biounit.mount(BIOUNIT_PATH, mode="rw", authority="cell")
+
+        context.pdbcode.share(readonly=False)
+        context.biounit.share(readonly=False)
+        context.mounts.sync(timeout=10)
+        ctx = context
+        return context
+    except BaseException:
+        try:
+            context.close()
+        finally:
+            seamless.close()
+        raise
+
+
+def close_context() -> None:
+    """Close the module-level context and its share server."""
+    global ctx
+    if ctx is not None:
+        ctx.close()
+        ctx = None
+    seamless.close()
+
+
+ctx: Context | None = None
+
+
+if __name__ == "__main__":
+    ctx = build_context()
+    print(f"PDB code share: {ctx.pdbcode.share.url}")
+    print(f"Biounit share: {ctx.biounit.share.url}")
+    if not sys.flags.interactive:
+        try:
+            input("Press Enter to stop the Seamless context... ")
+        except EOFError:
+            pass
+        finally:
+            close_context()

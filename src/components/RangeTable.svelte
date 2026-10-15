@@ -94,6 +94,11 @@
     appState.rows = updateRow(appState.rows, rowId, { alwaysVisible: checked });
   }
 
+  function clearRange(rowId: string) {
+    appState.rows = updateRow(appState.rows, rowId, { start: '', end: '', alwaysVisible: false });
+    editing = null;
+  }
+
   function addBelowActive() {
     const activeRowId = appState.activeCell?.rowId;
     appState.rows = addRow(appState.rows, activeRowId);
@@ -107,7 +112,7 @@
   function handleOutsidePointerDown(event: PointerEvent) {
     const target = event.target;
     if (!(target instanceof Element)) return;
-    if (target.closest('.range-table') || target.closest('.viewer-shell') || target.closest('.table-actions')) return;
+    if (target.closest('.range-table') || target.closest('.viewer-shell') || target.closest('.table-actions') || target.closest('.sidechain-toggle')) return;
     activate(null);
   }
 
@@ -162,6 +167,7 @@
           <td class="row-controls">
             <button type="button" class="icon-button" aria-label={`Move row ${rowIndex + 1} up`} title="Move up" disabled={rowIndex === 0} onclick={() => appState.rows = moveRow(appState.rows, row.id, -1)}>↑</button>
             <button type="button" class="icon-button" aria-label={`Move row ${rowIndex + 1} down`} title="Move down" disabled={rowIndex === appState.rows.length - 1} onclick={() => appState.rows = moveRow(appState.rows, row.id, 1)}>↓</button>
+            <button type="button" class="icon-button clear-range-button" aria-label={`Clear range for row ${rowIndex + 1}`} title="Clear range" onclick={() => clearRange(row.id)}>↺</button>
             <button type="button" class="icon-button remove-button" aria-label={`Remove row ${rowIndex + 1}`} title="Remove row" onclick={() => deleteRow(row.id)}>×</button>
           </td>
         </tr>

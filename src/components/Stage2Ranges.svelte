@@ -32,6 +32,11 @@
       <option value="invisible">Invisible</option>
     </select>
     <div class="field-note">Controls chains outside the focused range.</div>
+    <button type="button" class="button button-secondary sidechain-toggle" aria-pressed={appState.showSidechainSticks} onclick={() => appState.showSidechainSticks = !appState.showSidechainSticks}>
+      <span>Sidechain sticks</span>
+      <span class="sidechain-toggle-state">{appState.showSidechainSticks ? 'On' : 'Off'}</span>
+    </button>
+    <div class="field-note">Show or hide sticks for every defined range.</div>
   </div>
 
   <div class="stage-footer stage-footer-split">

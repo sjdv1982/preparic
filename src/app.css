@@ -102,7 +102,7 @@ button { color: inherit; }
 .range-table th:first-child, .range-table td:first-child { width: 38px; text-align: center; }
 .range-table th:nth-child(2) { width: 26%; }
 .range-table th:nth-child(3), .range-table th:nth-child(4) { width: 21%; }
-.range-table th:last-child { width: 68px; }
+.range-table th:last-child { width: 88px; }
 .range-table td { height: 38px; padding: 3px 4px; border-bottom: 1px solid rgba(151, 171, 199, .08); position: relative; }
 .range-table tbody tr:last-child td { border-bottom: 0; }
 .range-table td.active-cell { background: rgba(70, 130, 203, .12); box-shadow: inset 0 0 0 1px rgba(107, 163, 233, .48); }
@@ -131,6 +131,10 @@ select.cell-editor { padding-right: 4px; }
 .table-key-help span { color: #8390a0; margin: 0 3px; }
 .range-settings { margin-top: 21px; }
 .range-settings .select-input { min-height: 36px; }
+.sidechain-toggle { width: 100%; justify-content: space-between; margin-top: 14px; }
+.sidechain-toggle[aria-pressed="true"] { color: #c2e0ff; border-color: #5289c9; background: rgba(55, 121, 198, .15); }
+.sidechain-toggle-state { color: #73849a; font-size: 9px; text-transform: uppercase; }
+.sidechain-toggle[aria-pressed="true"] .sidechain-toggle-state { color: #86b9f1; }
 .stage-footer-split { border-top: 1px solid var(--line); padding-top: 18px; margin-top: 25px; }
 .sr-only { width: 1px; height: 1px; overflow: hidden; position: absolute; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 

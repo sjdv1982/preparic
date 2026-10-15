@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { appState } from '../lib/state.svelte';
+  import { setSharedBiounitIndex, setSharedPdbCode } from '../lib/seamless.svelte';
   import type { MolViewer } from '../lib/molstar/viewer';
 
   let { viewer, onContinue, startupPdbId, autoContinue }: {
@@ -11,32 +12,60 @@
   } = $props();
   let debounce: ReturnType<typeof setTimeout> | undefined;
   let requestId = 0;
-  let prefillStarted = $state(false);
+  let lastHandledPdbId: string | null = null;
+  let autoContinueHandled = false;
 
   const pdbPattern = /^[0-9][A-Za-z0-9]{3}$/;
 
   $effect(() => {
-    if (!viewer || !startupPdbId || prefillStarted) return;
-    const id = startupPdbId.trim().toUpperCase();
-    if (!pdbPattern.test(id)) return;
-    prefillStarted = true;
-    appState.pdbId = id;
-    void loadEntry(id, ++requestId, autoContinue);
+    if (!viewer) return;
+    const id = appState.pdbId.trim().toUpperCase();
+    if (appState.assemblies.length > 0) {
+      lastHandledPdbId = id;
+      return;
+    }
+    if (id === lastHandledPdbId) return;
+    queuePdbLoad(id, 0);
   });
 
   function handleInput(event: Event) {
     const value = (event.currentTarget as HTMLInputElement).value.trim();
+    const id = value.toUpperCase();
+    queuePdbLoad(id, 300);
+    setSharedPdbCode(id);
+  }
+
+  function queuePdbLoad(value: string, delay: number) {
+    const id = value.trim().toUpperCase();
+    lastHandledPdbId = id;
     const request = ++requestId;
     if (debounce) clearTimeout(debounce);
-    appState.pdbId = value.toUpperCase();
+    appState.pdbId = id;
     appState.assemblies = [];
     appState.assemblyId = '';
     appState.structureReady = false;
     appState.error = '';
     appState.loading = false;
+    appState.stage = 1;
+    appState.rows = [];
+    appState.chains = [];
+    appState.activeCell = null;
     if (viewer) void viewer.clear();
-    if (!pdbPattern.test(value)) return;
-    debounce = setTimeout(() => void loadEntry(value.toUpperCase(), request), 300);
+    if (!pdbPattern.test(id)) return;
+
+    const continueAfterLoad = Boolean(
+      autoContinue &&
+      !autoContinueHandled &&
+      startupPdbId &&
+      startupPdbId.trim().toUpperCase() === id,
+    );
+    if (continueAfterLoad) autoContinueHandled = true;
+    const load = () => {
+      debounce = undefined;
+      void loadEntry(id, request, continueAfterLoad);
+    };
+    if (delay > 0) debounce = setTimeout(load, delay);
+    else load();
   }
 
   async function loadEntry(id: string, request: number, continueAfterLoad = false) {
@@ -48,10 +77,15 @@
       const assemblies = await viewer.loadPdb(id);
       if (request !== requestId || !assemblies) return;
       appState.assemblies = assemblies;
-      const first = assemblies[0];
-      if (!first) throw new Error('No biological units or polymer chains were found.');
-      appState.assemblyId = first.id;
-      await viewer.showAssembly(first.id);
+      const requestedIndex = appState.biounitIndex;
+      const selectedIndex = Number.isSafeInteger(requestedIndex) && requestedIndex >= 1 && requestedIndex <= assemblies.length
+        ? requestedIndex
+        : 1;
+      const selectedAssembly = assemblies[selectedIndex - 1];
+      if (!selectedAssembly) throw new Error('No biological units or polymer chains were found.');
+      appState.biounitIndex = selectedIndex;
+      appState.assemblyId = selectedAssembly.id;
+      await viewer.showAssembly(selectedAssembly.id);
       if (request === requestId) {
         appState.structureReady = true;
         shouldContinue = continueAfterLoad;
@@ -66,11 +100,20 @@
 
   async function handleAssemblyChange(event: Event) {
     const id = (event.currentTarget as HTMLSelectElement).value;
+    await changeAssembly(id);
+  }
+
+  async function changeAssembly(id: string) {
+    const selectedIndex = appState.assemblies.findIndex(assembly => assembly.id === id) + 1;
+    if (selectedIndex < 1) return;
     const request = ++requestId;
+    if (debounce) clearTimeout(debounce);
     appState.assemblyId = id;
+    appState.biounitIndex = selectedIndex;
     appState.structureReady = false;
     appState.loading = true;
     appState.error = '';
+    setSharedBiounitIndex(selectedIndex);
     try {
       await viewer?.showAssembly(id);
       if (request === requestId) appState.structureReady = true;
@@ -80,6 +123,20 @@
       if (request === requestId) appState.loading = false;
     }
   }
+
+  $effect(() => {
+    const index = appState.biounitIndex;
+    const assemblies = appState.assemblies;
+    if (!viewer || !appState.structureReady || appState.loading || assemblies.length === 0) return;
+    if (!Number.isSafeInteger(index) || index < 1 || index > assemblies.length) {
+      appState.biounitIndex = 1;
+      return;
+    }
+    const selectedAssembly = assemblies[index - 1];
+    if (selectedAssembly && selectedAssembly.id !== appState.assemblyId) {
+      void changeAssembly(selectedAssembly.id);
+    }
+  });
 
   function assemblyLabel(index: number): string {
     const assembly = appState.assemblies[index];

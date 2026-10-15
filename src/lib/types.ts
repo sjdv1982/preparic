@@ -52,6 +52,8 @@ export interface RangeSpec extends ChainKey {
 
 export interface RenderSpec {
   focus: ChainKey | null;
+  range?: RangeSpec;
   alwaysVisible?: RangeSpec[];
+  sidechainRanges?: RangeSpec[];
   others?: OtherChainsMode;
 }

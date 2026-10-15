@@ -5,7 +5,7 @@ import { PluginBehaviors } from 'molstar/lib/mol-plugin/behavior.js';
 import { PluginContext } from 'molstar/lib/mol-plugin/context.js';
 import { DefaultPluginSpec } from 'molstar/lib/mol-plugin/spec.js';
 import { StateSelection } from 'molstar/lib/mol-state/index.js';
-import { chainExpression, complementExpression, rangeExpression, unionExpression } from './expressions';
+import { chainExpression, complementExpression, rangeExpression, sidechainRangeExpression, unionExpression } from './expressions';
 import { nameChains, type ChainUnitInput } from '../chains';
 import type { AssemblyInfo, ChainInfo, PickInfo, RenderSpec } from '../types';
 
@@ -43,6 +43,7 @@ export class MolViewer {
       await plugin.init();
       const initialized = await plugin.initViewerAsync(canvas, container);
       if (!initialized) throw new Error('WebGL is unavailable in this browser.');
+      plugin.canvas3d?.setProps({ renderer: { pickingAlphaThreshold: 0.1 } });
 
       const viewer = new MolViewer(plugin);
       plugin.managers.interactivity.setProps({ granularity: 'chain' });
@@ -222,19 +223,37 @@ export class MolViewer {
       return;
     }
 
-    const focusExpressions = [chainExpression(spec.focus), ...(spec.alwaysVisible ?? []).map(rangeExpression)];
+    const primaryFocus = spec.range ? rangeExpression(spec.range) : chainExpression(spec.focus);
+    const focusExpressions = [primaryFocus, ...(spec.alwaysVisible ?? []).map(rangeExpression)];
     const focus = unionExpression(focusExpressions);
     const focusComponent = await this.plugin.builders.structure.tryCreateComponentFromExpression(
       this.structureRef,
       focus,
       'phase1-focus',
-      { label: 'Focused chains and pinned ranges', tags: [RENDER_TAG] },
+      { label: 'Focused chain or range and pinned ranges', tags: [RENDER_TAG] },
     );
     if (focusComponent && token === this.renderToken) {
       await this.plugin.builders.structure.representation.addRepresentation(focusComponent, {
         type: 'cartoon',
         color: 'chain-id',
       }, { tag: RENDER_TAG });
+    }
+
+    const sidechainRanges = spec.sidechainRanges ?? [];
+    if (sidechainRanges.length > 0) {
+      const sidechainComponent = await this.plugin.builders.structure.tryCreateComponentFromExpression(
+        this.structureRef,
+        unionExpression(sidechainRanges.map(sidechainRangeExpression)),
+        'phase1-sidechain-sticks',
+        { label: 'Sidechain sticks for selected ranges', tags: [RENDER_TAG] },
+      );
+      if (sidechainComponent && token === this.renderToken) {
+        await this.plugin.builders.structure.representation.addRepresentation(sidechainComponent, {
+          type: 'ball-and-stick',
+          color: 'element-symbol',
+          typeParams: { visuals: ['intra-bond'] },
+        }, { tag: RENDER_TAG });
+      }
     }
     if (token !== this.renderToken || spec.others === 'invisible') return;
 

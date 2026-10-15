@@ -4,3 +4,4 @@ dist/
 .vite/
 coverage/
 .DS_Store
+deployment-mounts/

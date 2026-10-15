@@ -3,9 +3,10 @@
   import Stage2Ranges from './components/Stage2Ranges.svelte';
   import Viewer from './components/Viewer.svelte';
   import { enterStage2, appState, returnToStage1 } from './lib/state.svelte';
+  import { seamlessState, setSharedBiounitIndex, setSharedPdbCode } from './lib/seamless.svelte';
   import { findChain } from './lib/chains';
   import { updateRow } from './lib/ranges';
-  import type { ChainKey, PickInfo, RangeSpec } from './lib/types';
+  import type { ChainKey, PickInfo, RangeRow, RangeSpec } from './lib/types';
   import type { MolViewer } from './lib/molstar/viewer';
 
   const startupQuery = new URLSearchParams(window.location.search);
@@ -15,6 +16,45 @@
     appState.pdbId = startupPdbId.toUpperCase();
   }
 
+  let seamlessStateInitialized = false;
+
+  $effect(() => {
+    if (!seamlessState.ready) return;
+
+    if (!seamlessStateInitialized) {
+      seamlessStateInitialized = true;
+      if (!seamlessState.pdbCodePendingWrite && !appState.pdbId) {
+        appState.pdbId = seamlessState.pdbCode;
+      }
+      if (!seamlessState.biounitIndexPendingWrite) {
+        appState.biounitIndex = seamlessState.biounitIndex;
+      }
+      return;
+    }
+
+    if (seamlessState.pdbCode !== appState.pdbId) {
+      appState.pdbId = seamlessState.pdbCode;
+      appState.assemblies = [];
+      appState.assemblyId = '';
+      appState.structureReady = false;
+      appState.loading = false;
+      appState.error = '';
+      returnToStage1();
+      return;
+    }
+
+    if (seamlessState.biounitIndex !== appState.biounitIndex) {
+      appState.biounitIndex = seamlessState.biounitIndex;
+      if (appState.stage === 2) returnToStage1();
+    }
+  });
+
+  $effect(() => {
+    if (!seamlessState.ready || !seamlessStateInitialized) return;
+    setSharedPdbCode(appState.pdbId);
+    setSharedBiounitIndex(appState.biounitIndex);
+  });
+
   let viewer = $state<MolViewer | null>(null);
   let viewerError = $state('');
 
@@ -23,12 +63,41 @@
     viewerError = '';
   }
 
+  function rangeForRow(row: RangeRow | undefined): RangeSpec | null {
+    if (!row) return null;
+    const chain = appState.chains.find(item => item.name === row.chain);
+    const rawStart = row.start.trim();
+    const rawEnd = row.end.trim();
+    const start = Number(rawStart);
+    const end = Number(rawEnd);
+    if (!chain || !rawStart || !rawEnd || !Number.isInteger(start) || !Number.isInteger(end)) return null;
+    if (!chain.seqIds.has(start) || !chain.seqIds.has(end)) return null;
+    return {
+      labelAsymId: chain.labelAsymId,
+      instanceId: chain.instanceId,
+      start: Math.min(start, end),
+      end: Math.max(start, end),
+    };
+  }
+
   function handlePick(pick: PickInfo) {
     if (appState.stage !== 2) return;
     const cell = appState.activeCell;
     if (!cell) return;
     const row = appState.rows.find(item => item.id === cell.rowId);
     if (!row) return;
+    const selectedRange = rangeForRow(row);
+    if (selectedRange) {
+      if (selectedRange.labelAsymId !== pick.labelAsymId || selectedRange.instanceId !== pick.instanceId) return;
+      if (pick.labelSeqId < selectedRange.start) {
+        appState.rows = updateRow(appState.rows, row.id, { start: String(pick.labelSeqId), end: String(selectedRange.end) });
+      } else if (pick.labelSeqId > selectedRange.end) {
+        appState.rows = updateRow(appState.rows, row.id, { start: String(selectedRange.start), end: String(pick.labelSeqId) });
+      } else if (cell.column !== 'chain') {
+        appState.rows = updateRow(appState.rows, row.id, { [cell.column]: String(pick.labelSeqId) });
+      }
+      return;
+    }
     if (cell.column === 'chain') {
       const chain = findChain(appState.chains, pick.labelAsymId, pick.instanceId);
       if (chain) appState.rows = updateRow(appState.rows, row.id, { chain: chain.name });
@@ -69,33 +138,35 @@
     }
 
     const cell = appState.activeCell;
-    const row = cell ? appState.rows.find(item => item.id === cell.rowId) : undefined;
+    const activeRow = cell ? appState.rows.find(item => item.id === cell.rowId) : undefined;
+    const activeRowHasChain = activeRow && appState.chains.some(item => item.name === activeRow.chain);
+    const row = activeRowHasChain
+      ? activeRow
+      : appState.rows.find(item => appState.chains.some(chain => chain.name === item.chain));
     const chain = row ? appState.chains.find(item => item.name === row.chain) : undefined;
-    const isRangeCell = !!cell && (cell.column === 'start' || cell.column === 'end');
-    if (!isRangeCell || !chain) {
+    if (!row || !chain) {
       viewer.setGranularity('chain');
       void viewer.render({ focus: null });
       return;
     }
+    const selectedRange = rangeForRow(row);
 
     const alwaysVisible: RangeSpec[] = [];
     for (const pinned of appState.rows) {
       if (!pinned.alwaysVisible) continue;
-      const pinnedChain = appState.chains.find(item => item.name === pinned.chain);
-      const start = Number(pinned.start);
-      const end = Number(pinned.end);
-      if (pinnedChain && Number.isInteger(start) && Number.isInteger(end) && pinnedChain.seqIds.has(start) && pinnedChain.seqIds.has(end)) {
-        alwaysVisible.push({
-          labelAsymId: pinnedChain.labelAsymId,
-          instanceId: pinnedChain.instanceId,
-          start: Math.min(start, end),
-          end: Math.max(start, end),
-        });
-      }
+      const pinnedRange = rangeForRow(pinned);
+      if (pinnedRange) alwaysVisible.push(pinnedRange);
     }
+    const sidechainRanges = appState.showSidechainSticks
+      ? appState.rows.flatMap(item => {
+          const range = rangeForRow(item);
+          return range ? [range] : [];
+        })
+      : [];
     const focus: ChainKey = { labelAsymId: chain.labelAsymId, instanceId: chain.instanceId };
-    viewer.setGranularity('residue');
-    void viewer.render({ focus, alwaysVisible, others: appState.otherChainsMode });
+    const isRangeCell = !!cell && cell.rowId === row.id && (cell.column === 'start' || cell.column === 'end');
+    viewer.setGranularity(selectedRange !== null || isRangeCell ? 'residue' : 'chain');
+    void viewer.render({ focus, range: selectedRange ?? undefined, alwaysVisible, sidechainRanges, others: appState.otherChainsMode });
   });
 
 </script>
