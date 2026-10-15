@@ -47,17 +47,21 @@ export class MolViewer {
       const viewer = new MolViewer(plugin);
       plugin.managers.interactivity.setProps({ granularity: 'chain' });
       viewer.clickSubscription = plugin.behaviors.interaction.click.subscribe(event => {
-        const loci = event.current;
+        const loci = event.current.loci;
+
         if (!StructureElement.Loci.is(loci)) return;
         const location = StructureElement.Loci.getFirstLocation(loci);
+
         if (!location || !Unit.isAtomic(location.unit)) return;
         const labelSeqId = StructureProperties.residue.label_seq_id(location);
         if (!Number.isInteger(labelSeqId) || labelSeqId <= 0) return;
-        viewer.onPick({
+        const pick = {
           labelAsymId: StructureProperties.chain.label_asym_id(location),
           instanceId: location.unit.conformation.operator.instanceId,
           labelSeqId,
-        });
+        };
+
+        viewer.onPick(pick);
       });
       return viewer;
     } catch (error) {

@@ -8,6 +8,13 @@
   import type { ChainKey, PickInfo, RangeSpec } from './lib/types';
   import type { MolViewer } from './lib/molstar/viewer';
 
+  const startupQuery = new URLSearchParams(window.location.search);
+  const startupPdbId = startupQuery.get('pdb');
+  const autoContinue = startupQuery.get('continue') === '1';
+  if (startupPdbId && /^[0-9][A-Za-z0-9]{3}$/.test(startupPdbId)) {
+    appState.pdbId = startupPdbId.toUpperCase();
+  }
+
   let viewer = $state<MolViewer | null>(null);
   let viewerError = $state('');
 
@@ -127,7 +134,7 @@
       {/if}
 
       {#if appState.stage === 1}
-        <Stage1Structure {viewer} onContinue={proceedToRanges} />
+        <Stage1Structure {viewer} {startupPdbId} {autoContinue} onContinue={proceedToRanges} />
       {:else}
         <Stage2Ranges onBack={goBack} onComplete={complete} />
       {/if}

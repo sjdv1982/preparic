@@ -30,7 +30,6 @@ export const appState = $state<AppState>({
 });
 
 export function enterStage2(): void {
-  appState.chains = [];
   appState.rows = [createRangeRow()];
   appState.activeCell = null;
   appState.stage = 2;

@@ -3,11 +3,26 @@
   import { appState } from '../lib/state.svelte';
   import type { MolViewer } from '../lib/molstar/viewer';
 
-  let { viewer, onContinue }: { viewer: MolViewer | null; onContinue: () => void } = $props();
+  let { viewer, onContinue, startupPdbId, autoContinue }: {
+    viewer: MolViewer | null;
+    onContinue: () => void;
+    startupPdbId: string | null;
+    autoContinue: boolean;
+  } = $props();
   let debounce: ReturnType<typeof setTimeout> | undefined;
   let requestId = 0;
+  let prefillStarted = $state(false);
 
   const pdbPattern = /^[0-9][A-Za-z0-9]{3}$/;
+
+  $effect(() => {
+    if (!viewer || !startupPdbId || prefillStarted) return;
+    const id = startupPdbId.trim().toUpperCase();
+    if (!pdbPattern.test(id)) return;
+    prefillStarted = true;
+    appState.pdbId = id;
+    void loadEntry(id, ++requestId, autoContinue);
+  });
 
   function handleInput(event: Event) {
     const value = (event.currentTarget as HTMLInputElement).value.trim();
@@ -24,10 +39,11 @@
     debounce = setTimeout(() => void loadEntry(value.toUpperCase(), request), 300);
   }
 
-  async function loadEntry(id: string, request: number) {
+  async function loadEntry(id: string, request: number, continueAfterLoad = false) {
     if (!viewer || request !== requestId) return;
     appState.loading = true;
     appState.error = '';
+    let shouldContinue = false;
     try {
       const assemblies = await viewer.loadPdb(id);
       if (request !== requestId || !assemblies) return;
@@ -36,12 +52,16 @@
       if (!first) throw new Error('No biological units or polymer chains were found.');
       appState.assemblyId = first.id;
       await viewer.showAssembly(first.id);
-      if (request === requestId) appState.structureReady = true;
+      if (request === requestId) {
+        appState.structureReady = true;
+        shouldContinue = continueAfterLoad;
+      }
     } catch (error) {
       if (request === requestId) appState.error = error instanceof Error ? error.message : String(error);
     } finally {
       if (request === requestId) appState.loading = false;
     }
+    if (shouldContinue && request === requestId) onContinue();
   }
 
   async function handleAssemblyChange(event: Event) {
