@@ -1,0 +1,5 @@
+name: preparic
+channels:
+  - conda-forge
+dependencies:
+  - nodejs=22
