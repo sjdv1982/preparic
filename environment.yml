@@ -1,9 +1,16 @@
+# conda reserves PATH in `variables:`, so putting this directory on PATH at
+# activation (for preparic-start etc.) takes a one-time ./preparic-install-hook
+# inside the activated env.
 name: preparic
 channels:
   - conda-forge
 dependencies:
   - nodejs=22
   - python
+  - ipython
+  - pyyaml
   - numpy
   - scipy
   - pdb2pqr
+pip:
+  - seamless-suite

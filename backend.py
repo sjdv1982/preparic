@@ -1,4 +1,4 @@
-"""Run Preparic's writable PDB and biounit shares during development.
+"""Run Preparic's PDB, biounit, CIF, and range shares during development.
 
 Use ``python -i backend.py`` to leave the context available in an interactive
 prompt; call ``close_context()`` when you are done.
@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import seamless
+import yaml
 from seamless import Cell
 from seamless_workflow import Context, shareserver
 
@@ -18,6 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 MOUNT_DIRECTORY = PROJECT_ROOT / "deployment-mounts"
 PDBCODE_PATH = MOUNT_DIRECTORY / "pdbcode.txt"
 BIOUNIT_PATH = MOUNT_DIRECTORY / "biounit.json"
+RANGES_PATH = MOUNT_DIRECTORY / "ranges.yaml"
 
 
 def _initial_pdb_code(path: Path) -> str:
@@ -34,6 +36,19 @@ def _initial_biounit_index(path: Path) -> int:
     except (OSError, json.JSONDecodeError):
         return 1
     return value if type(value) is int and value >= 1 else 1
+
+
+def _initial_ranges(path: Path) -> dict:
+    if not path.exists():
+        return {"ranges": []}
+    try:
+        # BaseLoader avoids YAML 1.1 coercions such as chain id "NO" to False.
+        value = yaml.load(path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    except (OSError, yaml.YAMLError):
+        return {"ranges": []}
+    if isinstance(value, dict) and isinstance(value.get("ranges"), list):
+        return value
+    return {"ranges": []}
 
 
 def build_context() -> Context:
@@ -60,8 +75,18 @@ def build_context() -> Context:
         context.biounit.set(_initial_biounit_index(BIOUNIT_PATH))
         context.biounit.mount(BIOUNIT_PATH, mode="rw", authority="cell")
 
+        context.cif = Cell(celltype="text")
+        context.cif.set("")
+
+        context.ranges = Cell(celltype="yaml")
+        context.ranges.set(yaml.safe_dump(_initial_ranges(RANGES_PATH), sort_keys=False))
+        context.ranges.mount(RANGES_PATH, mode="rw", authority="cell")
+
         context.pdbcode.share(readonly=False)
         context.biounit.share(readonly=False)
+        # The dotted path disables the browser client's automatic CIF read.
+        context.cif.share(path="cif.cif", readonly=False)
+        context.ranges.share(readonly=False)
         context.mounts.sync(timeout=10)
         ctx = context
         return context
@@ -89,6 +114,8 @@ if __name__ == "__main__":
     ctx = build_context()
     print(f"PDB code share: {ctx.pdbcode.share.url}")
     print(f"Biounit share: {ctx.biounit.share.url}")
+    print(f"CIF share: {ctx.cif.share.url}")
+    print(f"Ranges share: {ctx.ranges.share.url}")
     if not sys.flags.interactive:
         try:
             input("Press Enter to stop the Seamless context... ")

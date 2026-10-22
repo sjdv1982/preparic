@@ -7,3 +7,4 @@ coverage/
 deployment-mounts/
 __pycache__/
 .serena/
+*.log

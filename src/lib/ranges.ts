@@ -7,6 +7,10 @@ export function createRangeRow(chain = ''): RangeRow {
   return { id: `range-${rowSequence}`, alwaysVisible: false, chain, start: '', end: '' };
 }
 
+export function cloneRangeRows(rows: RangeRow[]): RangeRow[] {
+  return rows.map(row => ({ ...row, id: createRangeRow().id }));
+}
+
 export function normalizeRow(row: RangeRow): RangeRow {
   const start = Number(row.start);
   const end = Number(row.end);

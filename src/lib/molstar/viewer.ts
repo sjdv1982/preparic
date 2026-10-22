@@ -24,6 +24,7 @@ export class MolViewer {
   private renderQueue: Promise<unknown> = Promise.resolve();
   private clickSubscription: { unsubscribe(): void } | undefined;
   private onPick: (pick: PickInfo) => void = () => undefined;
+  private onCifDownloaded: (cif: string) => void = () => undefined;
 
   private constructor(plugin: PluginContext) {
     this.plugin = plugin;
@@ -75,6 +76,10 @@ export class MolViewer {
     this.onPick = callback;
   }
 
+  setOnCifDownloaded(callback: (cif: string) => void): void {
+    this.onCifDownloaded = callback;
+  }
+
   setGranularity(granularity: 'chain' | 'residue'): void {
     this.plugin.managers.interactivity.setProps({ granularity });
   }
@@ -115,11 +120,13 @@ export class MolViewer {
     this.structureRef = null;
     try {
       const data = await this.plugin.builders.data.download({
-        url: `https://models.rcsb.org/${encodeURIComponent(id.toLowerCase())}.bcif`,
-        isBinary: true,
+        url: `https://files.rcsb.org/download/${encodeURIComponent(id.toUpperCase())}.cif`,
+        isBinary: false,
         label: id.toUpperCase(),
       });
       if (token !== this.loadToken) return null;
+      const cif = data.obj?.data;
+      if (typeof cif !== 'string') throw new Error('The PDB entry did not return a text CIF file.');
       const trajectory = await this.plugin.builders.structure.parseTrajectory(data, 'mmcif');
       if (token !== this.loadToken) return null;
       const modelRef = await this.plugin.builders.structure.createModel(trajectory, { modelIndex: 0 });
@@ -128,7 +135,13 @@ export class MolViewer {
       if (!model) throw new Error('The PDB entry did not contain a usable model.');
       this.modelRef = modelRef;
       this.model = model;
-      return this.getAssemblies(this.model);
+      const assemblies = this.getAssemblies(this.model);
+      try {
+        this.onCifDownloaded(cif);
+      } catch {
+        // Saving the downloaded CIF must never fail or delay rendering it.
+      }
+      return assemblies;
     } catch (error) {
       if (token !== this.loadToken) return null;
       this.modelRef = null;

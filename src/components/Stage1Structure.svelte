@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { appState } from '../lib/state.svelte';
-  import { setSharedBiounitIndex, setSharedPdbCode } from '../lib/seamless.svelte';
+  import { cancelSharedCifWrite, setSharedBiounitIndex, setSharedPdbCode } from '../lib/seamless.svelte';
   import type { MolViewer } from '../lib/molstar/viewer';
 
   let { viewer, onContinue, startupPdbId, autoContinue }: {
@@ -37,6 +37,7 @@
 
   function queuePdbLoad(value: string, delay: number) {
     const id = value.trim().toUpperCase();
+    cancelSharedCifWrite();
     lastHandledPdbId = id;
     const request = ++requestId;
     if (debounce) clearTimeout(debounce);

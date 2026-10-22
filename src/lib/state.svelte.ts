@@ -1,4 +1,4 @@
-import { createRangeRow } from './ranges';
+import { cloneRangeRows, createRangeRow } from './ranges';
 import type { ActiveCell, AssemblyInfo, ChainInfo, OtherChainsMode, RangeRow, Stage } from './types';
 
 export interface AppState {
@@ -33,8 +33,8 @@ export const appState = $state<AppState>({
   showSidechainSticks: false,
 });
 
-export function enterStage2(): void {
-  appState.rows = [createRangeRow()];
+export function enterStage2(initialRows?: RangeRow[]): void {
+  appState.rows = initialRows?.length ? cloneRangeRows(initialRows) : [createRangeRow()];
   appState.activeCell = null;
   appState.showSidechainSticks = false;
   appState.stage = 2;

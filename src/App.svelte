@@ -3,9 +3,9 @@
   import Stage2Ranges from './components/Stage2Ranges.svelte';
   import Viewer from './components/Viewer.svelte';
   import { enterStage2, appState, returnToStage1 } from './lib/state.svelte';
-  import { seamlessState, setSharedBiounitIndex, setSharedPdbCode } from './lib/seamless.svelte';
+  import { cancelSharedCifWrite, seamlessState, setSharedBiounitIndex, setSharedCif, setSharedPdbCode, setSharedRangeRows } from './lib/seamless.svelte';
   import { findChain } from './lib/chains';
-  import { updateRow } from './lib/ranges';
+  import { cloneRangeRows, updateRow } from './lib/ranges';
   import type { ChainKey, PickInfo, RangeRow, RangeSpec } from './lib/types';
   import type { MolViewer } from './lib/molstar/viewer';
 
@@ -17,6 +17,7 @@
   }
 
   let seamlessStateInitialized = false;
+  let appliedRangeRevision = 0;
 
   $effect(() => {
     if (!seamlessState.ready) return;
@@ -33,6 +34,7 @@
     }
 
     if (seamlessState.pdbCode !== appState.pdbId) {
+      cancelSharedCifWrite();
       appState.pdbId = seamlessState.pdbCode;
       appState.assemblies = [];
       appState.assemblyId = '';
@@ -55,11 +57,22 @@
     setSharedBiounitIndex(appState.biounitIndex);
   });
 
+  $effect(() => {
+    if (appState.stage !== 2 || !seamlessState.rangesReady) return;
+    if (seamlessState.rangeRevision > appliedRangeRevision) {
+      appliedRangeRevision = seamlessState.rangeRevision;
+      appState.rows = cloneRangeRows(seamlessState.rangeRows);
+      return;
+    }
+    setSharedRangeRows(appState.rows);
+  });
+
   let viewer = $state<MolViewer | null>(null);
   let viewerError = $state('');
 
   function handleViewerReady(created: MolViewer) {
     viewer = created;
+    created.setOnCifDownloaded(setSharedCif);
     viewerError = '';
   }
 
@@ -117,7 +130,8 @@
       return;
     }
     appState.chains = chains;
-    enterStage2();
+    appliedRangeRevision = seamlessState.rangeRevision;
+    enterStage2(seamlessState.rangesReady ? seamlessState.rangeRows : undefined);
   }
 
   function goBack() {
