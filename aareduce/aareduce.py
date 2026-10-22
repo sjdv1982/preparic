@@ -333,12 +333,16 @@ def check_pdb(pdbres, heavy=False):
                 )
 
 
-def write_pdb(pdbres, chain, heavy=False, one_letter_na=False):
+def write_pdb(pdbres, chain, heavy=False, one_letter_na=False, renum=True):
     pdblines = []
     mapping = []
     atomcounter = args.startatom
     rescounter = args.startres
     for res in pdbres:
+        if renum:
+            reschain, resnr, icode = chain, rescounter, " "
+        else:
+            reschain, resnr, icode = res.chain, int(res.resid[:4]), res.resid[4]
         top = res.topology
         for a in top.atomorder:
             atom = top.atoms[a]
@@ -363,13 +367,30 @@ def write_pdb(pdbres, chain, heavy=False, one_letter_na=False):
             if one_letter_na and resname in mapnucrev:
                 resname = mapnucrev[resname]
             pdblines.append(
-                "ATOM%7d %4s %3s %s%4d    %s %4d %7.3f 0 1.00"
-                % (atomcounter, atomname, resname, chain, rescounter, xyz, type, atom["charge"])
+                "ATOM%7d %4s %3s %s%4d%s   %s %4d %7.3f 0 1.00"
+                % (
+                    atomcounter,
+                    atomname,
+                    resname,
+                    reschain,
+                    resnr,
+                    icode,
+                    xyz,
+                    type,
+                    atom["charge"],
+                )
             )
             atomcounter += 1
-        mapping.append((res.resid, rescounter))
+        mapping.append((res.resid, resnr))
         rescounter += 1
     return pdblines, mapping
+
+
+def output_resnr(index, res):
+    """Residue number, as a string, of the index-th residue in the output PDB"""
+    if args.no_renum:
+        return res.resid.strip()
+    return str(index + args.startres)
 
 
 def set_reference(pdbres, pdbreferes):
@@ -495,9 +516,17 @@ parser.add_argument(
     action="append",
     default=[],
 )
-parser.add_argument("--chain", help="Set the chain in the output PDB", default=" ")
-parser.add_argument("--startres", help="Set residue number of first residue", type=int, default=1)
+parser.add_argument("--chain", help="Set the chain in the output PDB", default=None)
+parser.add_argument(
+    "--startres", help="Set residue number of first residue", type=int, default=None
+)
 parser.add_argument("--startatom", help="Set atom number of first atom", type=int, default=1)
+parser.add_argument(
+    "--no-renum",
+    dest="no_renum",
+    help="Preserve the residue numbers and chains of the input PDB, instead of renumbering all residues sequentially. Mutually exclusive with --chain and --startres",
+    action="store_true",
+)
 parser.add_argument(
     "--mutate",
     dest="mutatefiles",
@@ -536,6 +565,16 @@ else:
         args.pdb = positional_args[0]
         if len(positional_args) > 1:
             args.output = positional_args[1]
+
+if args.no_renum:
+    if args.chain is not None:
+        raise ValueError("--no-renum and --chain are mutually incompatible")
+    if args.startres is not None:
+        raise ValueError("--no-renum and --startres are mutually incompatible")
+if args.chain is None:
+    args.chain = " "
+if args.startres is None:
+    args.startres = 1
 
 assert len(args.chain) == 1, args.chain
 
@@ -635,6 +674,8 @@ def run(pdbfile):
     if args.nalib:
         pdbcomplete.apply_nalib(pdb, nalib, args.manual, args.heavy)
     if args.pdb2pqr:
+        # PDB2PQR may reorder chains, and its output is matched by residue order,
+        # so it always gets a single, renumbered chain (even with --no-renum)
         pdblines = write_pdb(pdb, args.chain, one_letter_na=True)[0]
         pqrlines = run_pdb2pqr(pdblines)
         pqr = read_pdb(pqrlines, "<PDB2PQR output from %s>" % pdbfile)
@@ -648,7 +689,7 @@ def run(pdbfile):
     if not args.manual:
         pdb_lastresort(pdb)
         check_pdb(pdb, heavy=args.heavy)
-    pdblines, mapping = write_pdb(pdb, args.chain, heavy=args.heavy)
+    pdblines, mapping = write_pdb(pdb, args.chain, heavy=args.heavy, renum=not args.no_renum)
     return pdblines, mapping, pdb
 
 
@@ -669,7 +710,7 @@ if args.batch:
             for i, res in enumerate(pdbtop):
                 if len(res.topology.patches):
                     for p in res.topology.patches:
-                        outf.write(str(i + args.startres) + ' ' + p + '\n')
+                        outf.write(output_resnr(i, res) + ' ' + p + '\n')
             outf.close()
 else:
     outfile = os.path.splitext(args.pdb)[0] + "-aa.pdb"
@@ -679,8 +720,9 @@ else:
     outf = open(outfile, "w")
     for l in pdblines:
         print(l, file=outf)
-    for v1, v2 in mapping:
-        print(v1, v2)
+    if not args.no_renum:
+        for v1, v2 in mapping:
+            print(v1, v2)
     outf.close()
     if args.dumppatch:
         outfilep = os.path.splitext(outfile)[0] + ".patch"
@@ -688,5 +730,5 @@ else:
         for i, res in enumerate(pdbtop):
             if len(res.topology.patches):
                 for p in res.topology.patches:
-                    outf.write(str(i + args.startres) + ' ' + p + '\n')
+                    outf.write(output_resnr(i, res) + ' ' + p + '\n')
         outf.close()
