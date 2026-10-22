@@ -9,6 +9,7 @@ dependencies:
   - python
   - ipython
   - pyyaml
+  - biopython
   - numpy
   - scipy
   - pdb2pqr

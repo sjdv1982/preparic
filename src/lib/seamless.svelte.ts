@@ -1,4 +1,4 @@
-import { rangeDefinitionSignature, parseRangeDefinition, serializeRangeDefinition } from './range-definition';
+import { rangeDefinitionObject, rangeDefinitionSignature, parseRangeDefinition, serializeRangeDefinition } from './range-definition';
 import type { RangeRow } from './types';
 
 type SharedValue = string | Blob | null | undefined;
@@ -11,14 +11,25 @@ interface SharedCell {
   set: (value: string) => boolean;
 }
 
+interface StateGraphNode {
+  path: Array<string | number>;
+  exception?: string | null;
+}
+
+interface StateGraph {
+  nodes?: StateGraphNode[];
+}
+
 interface ShareContext {
   self: {
     sharelist: string[];
     onsharelist: (keys: string[]) => void;
+    onstategraph?: (graph: StateGraph) => void;
   };
   pdbcode?: SharedCell;
   biounit?: SharedCell;
   ranges?: SharedCell;
+  range_specs?: SharedCell;
   'cif.cif'?: SharedCell;
 }
 
@@ -31,7 +42,7 @@ type ShareConnector = (
 
 type IdleDeadlineLike = { didTimeout: boolean; timeRemaining: () => number };
 type IdleWindow = Window & {
-  requestIdleCallback?: (callback: (deadline: IdleDeadlineLike) => void) => number;
+  requestIdleCallback?: (callback: (deadline: IdleDeadlineLike) => void, options?: { timeout: number }) => number;
   cancelIdleCallback?: (handle: number) => void;
 };
 
@@ -52,6 +63,7 @@ export const seamlessState = $state({
   rangeRows: [] as RangeRow[],
   rangeRevision: 0,
   rangeError: '',
+  rangeTransformError: '',
 });
 
 let client: ShareContext | undefined;
@@ -62,6 +74,7 @@ let cifWriteCallbackId: number | undefined;
 let cifWriteCallbackKind: 'idle' | 'timeout' | undefined;
 let cifWriteGeneration = 0;
 let rangeSignature: string | undefined;
+let rangeSpecsSignature: string | undefined;
 const received = new Set<ShareKey>();
 
 function normalizePdbCode(value: SharedValue): string {
@@ -78,6 +91,15 @@ function updateReady(): void {
   if (!received.has('pdbcode') || !received.has('biounit')) return;
   seamlessState.ready = true;
   seamlessState.status = 'connected';
+}
+
+function receiveStateGraph(graph: StateGraph): void {
+  const failedNode = graph.nodes?.find(node =>
+    node.path.includes('ranges_to_pdb')
+    && typeof node.exception === 'string'
+    && node.exception.length > 0
+  );
+  seamlessState.rangeTransformError = failedNode?.exception ?? '';
 }
 
 function receivePdbCode(value: SharedValue): void {
@@ -146,23 +168,37 @@ function flushCifWrite(generation: number): void {
   const cell = client?.['cif.cif'];
   const cif = pendingCif;
   if (cif === undefined || !cell || cell.readonly) return;
+  let accepted = false;
   try {
-    if (cell.set(cif) && pendingCif === cif) pendingCif = undefined;
+    accepted = cell.set(cif);
   } catch {
     // Keep the latest CIF queued; export errors must not affect the viewer.
   }
+  if (accepted) {
+    if (pendingCif === cif) pendingCif = undefined;
+    return;
+  }
+  // A share entry can be rejected while the browser client is replacing a stale entry.
+  // Retry until the current writable entry is ready; accepted writes handle transport
+  // retries in the browser client.
+  if (pendingCif !== cif || typeof window === 'undefined') return;
+  cifWriteCallbackKind = 'timeout';
+  cifWriteCallbackId = window.setTimeout(() => flushCifWrite(generation), 250);
 }
 
 function scheduleCifWrite(): void {
   if (pendingCif === undefined || cifWriteCallbackId !== undefined) return;
   const cell = client?.['cif.cif'];
   if (!cell || cell.readonly || typeof window === 'undefined') return;
-  // Start the potentially large PUT during idle time; viewer loading never awaits it.
+  // Prefer idle time, but cap the delay so an active viewer cannot starve the upload.
   const generation = cifWriteGeneration;
   const idleWindow = window as IdleWindow;
   if (idleWindow.requestIdleCallback) {
     cifWriteCallbackKind = 'idle';
-    cifWriteCallbackId = idleWindow.requestIdleCallback(() => flushCifWrite(generation));
+    cifWriteCallbackId = idleWindow.requestIdleCallback(
+      () => flushCifWrite(generation),
+      { timeout: 1000 }
+    );
   } else {
     cifWriteCallbackKind = 'timeout';
     cifWriteCallbackId = window.setTimeout(() => flushCifWrite(generation), 100);
@@ -179,6 +215,7 @@ if (typeof window === 'undefined' || !window.connect_seamless) {
 } else {
   try {
     client = window.connect_seamless(null, null, 'preparic');
+    client.self.onstategraph = receiveStateGraph;
     client.self.onsharelist = keys => {
       attachShare('pdbcode', keys);
       attachShare('biounit', keys);
@@ -269,6 +306,21 @@ export function setSharedRangeRows(rows: RangeRow[]): boolean {
     if (!accepted) return false;
     rangeSignature = signature;
     seamlessState.rangeRows = rows.map(row => ({ ...row }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function setSharedRangeSpecs(rows: RangeRow[]): boolean {
+  const cell = client?.range_specs;
+  if (!client || !seamlessState.rangesReady || !cell || cell.readonly) return false;
+  const value = JSON.stringify(rangeDefinitionObject(rows));
+  if (value === rangeSpecsSignature) return true;
+  try {
+    const accepted = cell.set(value);
+    if (!accepted) return false;
+    rangeSpecsSignature = value;
     return true;
   } catch {
     return false;

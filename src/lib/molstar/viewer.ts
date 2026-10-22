@@ -76,8 +76,17 @@ export class MolViewer {
     this.onPick = callback;
   }
 
+  private downloadedCif: string | null = null;
+
   setOnCifDownloaded(callback: (cif: string) => void): void {
     this.onCifDownloaded = callback;
+    if (this.downloadedCif !== null) {
+      try {
+        callback(this.downloadedCif);
+      } catch {
+        // A pending CIF upload must not interrupt rendering.
+      }
+    }
   }
 
   setGranularity(granularity: 'chain' | 'residue'): void {
@@ -93,6 +102,7 @@ export class MolViewer {
 
   clear(): Promise<void> {
     const token = ++this.loadToken;
+    this.downloadedCif = null;
     this.showToken += 1;
     this.renderToken += 1;
     const pendingLoad = this.loadQueue;
@@ -111,6 +121,7 @@ export class MolViewer {
 
   private async loadPdbNow(id: string, token: number): Promise<AssemblyInfo[] | null> {
     if (token !== this.loadToken) return null;
+    this.downloadedCif = null;
     await this.showQueue;
     await this.renderQueue;
     if (token !== this.loadToken) return null;
@@ -136,6 +147,7 @@ export class MolViewer {
       this.modelRef = modelRef;
       this.model = model;
       const assemblies = this.getAssemblies(this.model);
+      this.downloadedCif = cif;
       try {
         this.onCifDownloaded(cif);
       } catch {

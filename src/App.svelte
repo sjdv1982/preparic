@@ -3,7 +3,7 @@
   import Stage2Ranges from './components/Stage2Ranges.svelte';
   import Viewer from './components/Viewer.svelte';
   import { enterStage2, appState, returnToStage1 } from './lib/state.svelte';
-  import { cancelSharedCifWrite, seamlessState, setSharedBiounitIndex, setSharedCif, setSharedPdbCode, setSharedRangeRows } from './lib/seamless.svelte';
+  import { cancelSharedCifWrite, seamlessState, setSharedBiounitIndex, setSharedCif, setSharedPdbCode, setSharedRangeRows, setSharedRangeSpecs } from './lib/seamless.svelte';
   import { findChain } from './lib/chains';
   import { cloneRangeRows, updateRow } from './lib/ranges';
   import type { ChainKey, PickInfo, RangeRow, RangeSpec } from './lib/types';
@@ -62,9 +62,11 @@
     if (seamlessState.rangeRevision > appliedRangeRevision) {
       appliedRangeRevision = seamlessState.rangeRevision;
       appState.rows = cloneRangeRows(seamlessState.rangeRows);
+      setSharedRangeSpecs(appState.rows);
       return;
     }
     setSharedRangeRows(appState.rows);
+    setSharedRangeSpecs(appState.rows);
   });
 
   let viewer = $state<MolViewer | null>(null);
@@ -232,6 +234,9 @@
         <div class="viewer-title"><span class="viewer-title-icon">◈</span><span>{appState.pdbId || 'Structure viewer'}</span>{#if appState.structureReady}<span class="loaded-badge">LOADED</span>{/if}</div>
         <div class="viewer-toolbar-right"><span class="viewer-mode"><span>●</span> {appState.stage === 1 ? 'Structure view' : 'Pick mode'}</span><span class="toolbar-divider"></span><span class="viewer-version">Mol*</span></div>
       </div>
+      {#if seamlessState.rangeTransformError}
+        <div class="viewer-error" role="alert"><strong>Range extraction failed</strong><span>{seamlessState.rangeTransformError}</span></div>
+      {/if}
       <div class="viewer-stage">
         <Viewer onReady={handleViewerReady} onError={(message) => viewerError = message} onPick={handlePick} />
         {#if !appState.structureReady}

@@ -30,15 +30,26 @@ export function rangeDefinitionSignature(rows: RangeRow[]): string {
   })));
 }
 
-export function serializeRangeDefinition(rows: RangeRow[]): string {
-  return stringify({
+export function rangeDefinitionObject(rows: RangeRow[]): {
+  ranges: Array<{
+    chain: string;
+    start: string | number;
+    end: string | number;
+    always_visible: boolean;
+  }>;
+} {
+  return {
     ranges: rows.filter(isDefinedRange).map(row => ({
       chain: row.chain,
       start: yamlValue(row.start),
       end: yamlValue(row.end),
       always_visible: row.alwaysVisible,
     })),
-  }, { defaultStringType: 'QUOTE_DOUBLE' });
+  };
+}
+
+export function serializeRangeDefinition(rows: RangeRow[]): string {
+  return stringify(rangeDefinitionObject(rows), { defaultStringType: 'QUOTE_DOUBLE' });
 }
 
 export function parseRangeDefinition(source: string): RangeRow[] {
