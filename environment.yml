@@ -3,3 +3,7 @@ channels:
   - conda-forge
 dependencies:
   - nodejs=22
+  - python
+  - numpy
+  - scipy
+  - pdb2pqr
