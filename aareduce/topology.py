@@ -3,8 +3,12 @@
 # Authors and copyright holders: Sjoerd de Vries, Isaure Chauvot de Beauchene, Christina Schindler
 # Licensed under the GNU General Public License, version 3 or later; see LICENSE.txt
 
+
 class Residue(object):
-    topname = None #name of topology where this residue has been defined, e.g. "oplsx" or "dna-rna"
+    topname = (
+        None  # name of topology where this residue has been defined, e.g. "oplsx" or "dna-rna"
+    )
+
     def __init__(self, name, atomorder, atoms, bonds, topname=None):
         self.topname = topname
         self.name = name
@@ -32,8 +36,9 @@ class Residue(object):
             pass
         bonds2 = []
         for b in self.bonds:
-            if b[0] != name and b[1] != name: bonds2.append(b)
-        #TODO: delete dihedrals (once we read them)
+            if b[0] != name and b[1] != name:
+                bonds2.append(b)
+        # TODO: delete dihedrals (once we read them)
         self.bonds = bonds2
 
     def modify_atom(self, atom):
@@ -63,12 +68,14 @@ class Residue(object):
         angles = []
         for atom1, atom2 in self.bonds:
             try:
-              a1 = self.atomorder.index(atom1)
-              a2 = self.atomorder.index(atom2)
+                a1 = self.atomorder.index(atom1)
+                a2 = self.atomorder.index(atom2)
             except ValueError:
-              pass
-            if atom1 not in connectivity: connectivity[atom1] = set()
-            if atom2 not in connectivity: connectivity[atom2] = set()
+                pass
+            if atom1 not in connectivity:
+                connectivity[atom1] = set()
+            if atom2 not in connectivity:
+                connectivity[atom2] = set()
             con1 = connectivity[atom1]
             con2 = connectivity[atom2]
             con1.add(a2)
@@ -78,7 +85,8 @@ class Residue(object):
             for a1 in con:
                 atom1 = self.atomorder[a1]
                 for a2 in con:
-                    if a2 <= a1: continue
+                    if a2 <= a1:
+                        continue
                     atom2 = self.atomorder[a2]
                     angles.append((atom1, atom, atom2))
         return angles
@@ -91,6 +99,7 @@ def load(d):
         residues[resname] = res
     patches = d["patches"]
     return residues, patches
+
 
 def merge(forcefields):
     residues, patches = {}, {}
@@ -119,5 +128,5 @@ def merge(forcefields):
                     msg = "topology names: '%s' and '%s'" % (topname, new_topname)
                 raise ValueError("Duplicate patch %s, %s" % (patchname, msg))
             patches[patchname] = new_patch
-    patches = {k:(k, v) for k,v in patches.items()}
+    patches = {k: (k, v) for k, v in patches.items()}
     return residues, patches
