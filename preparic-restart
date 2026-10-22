@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Stop any running preparic-start, then run it again. Options (e.g. --log)
+# are passed on to preparic-start.
+
+dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+"$dir/preparic-stop" || exit
+exec "$dir/preparic-start" "$@"

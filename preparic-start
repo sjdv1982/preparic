@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""Start the Seamless backend (backend.py) and the Vite dev server.
+
+Both servers run as subprocesses of this process and write to this terminal,
+or to one log file with --log. With --shell (which requires --log), only Vite
+writes to the log, and the backend runs in an interactive shell on this
+terminal instead. Stop them with Ctrl-C (with --shell: by exiting the shell)
+or preparic-stop; if either server exits by itself, the other one is stopped
+too.
+"""
+
+import argparse
+import importlib.util
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import termios
+import threading
+import time
+from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+DEFAULT_LOG = PROJECT_ROOT / "preparic.log"
+STOP_TIMEOUT = 20  # seconds the servers get to stop before they are killed
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.strip().split("\n\n")[0])
+    parser.add_argument(
+        "--log",
+        nargs="?",
+        const=DEFAULT_LOG,
+        type=Path,
+        metavar="FILE",
+        help="write stdout and stderr of both servers to FILE instead of the "
+        f"terminal (default: {DEFAULT_LOG.name} in the project directory; "
+        "overwritten at each start)",
+    )
+    parser.add_argument(
+        "--shell",
+        action="store_true",
+        help="run the backend in an interactive shell on this terminal "
+        "(ipython -i if available, else python -i); only Vite's output goes "
+        "to the log. Requires --log",
+    )
+    args = parser.parse_args()
+    if args.shell and args.log is None:
+        parser.error("--shell requires --log")
+    return args
+
+
+def shell_command() -> list[str]:
+    script = str(PROJECT_ROOT / "backend.py")
+    # "-m IPython" is "ipython", but guaranteed to run in this interpreter.
+    if importlib.util.find_spec("IPython") is not None:
+        return [sys.executable, "-m", "IPython", "-i", script]
+    return [sys.executable, "-i", script]
+
+
+def in_own_group(name: str, shell: bool) -> bool:
+    """Every server has its own session, except the interactive shell, which
+    must stay in the terminal's foreground process group."""
+    return not (shell and name == "backend")
+
+
+def send_signal(proc: subprocess.Popen, sig: int, whole_group: bool) -> None:
+    try:
+        if whole_group:
+            os.killpg(proc.pid, sig)
+        else:
+            proc.send_signal(sig)
+    except ProcessLookupError:
+        pass
+
+
+def stop_servers(procs: dict[str, subprocess.Popen], shell: bool, say) -> None:
+    """Ask all servers to stop, then kill those still running after STOP_TIMEOUT."""
+    for name, proc in procs.items():
+        if proc.poll() is not None:
+            continue
+        if name == "backend" and not shell:
+            # Same as pressing Enter at its prompt: backend.py closes the
+            # Seamless context and exits.
+            proc.stdin.close()
+        else:
+            # backend.py closes the Seamless context on SIGTERM.
+            send_signal(proc, signal.SIGTERM, in_own_group(name, shell))
+    deadline = time.monotonic() + STOP_TIMEOUT
+    for name, proc in procs.items():
+        try:
+            proc.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            say(f"{name} did not stop within {STOP_TIMEOUT}s; killing it")
+            send_signal(proc, signal.SIGKILL, in_own_group(name, shell))
+            proc.wait()
+
+
+def main() -> int:
+    args = parse_args()
+    npm = shutil.which("npm")
+    if npm is None:
+        print("preparic-start: npm not found; activate the preparic conda env", file=sys.stderr)
+        return 1
+    if args.shell and not sys.stdin.isatty():
+        print("preparic-start: --shell needs a terminal", file=sys.stderr)
+        return 1
+
+    log = open(args.log, "w", buffering=1, encoding="utf-8") if args.log else None
+
+    def say(message: str) -> None:
+        line = f"[preparic-start] {message}"
+        print(line, flush=True)
+        if log is not None:
+            log.write(line + "\n")
+
+    # Each server gets its own session, so Ctrl-C reaches only this process,
+    # which then stops them in order. The stdin pipe stays open until
+    # shutdown: backend.py waits on it.
+    detached = dict(
+        cwd=PROJECT_ROOT,
+        stdin=subprocess.PIPE,
+        stdout=log,
+        stderr=subprocess.STDOUT if log else None,
+        start_new_session=True,
+    )
+    vite = ([npm, "run", "dev"], detached)
+    if args.shell:
+        servers = {"vite": vite, "backend": (shell_command(), dict(cwd=PROJECT_ROOT))}
+    else:
+        backend = [sys.executable, "-u", str(PROJECT_ROOT / "backend.py")]
+        servers = {"backend": (backend, detached), "vite": vite}
+
+    stop = threading.Event()
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, lambda *_: stop.set())
+    # With --shell, Ctrl-C belongs to the shell. This is a handler rather than
+    # SIG_IGN, because the shell would inherit an ignored signal.
+    signal.signal(signal.SIGINT, (lambda *_: None) if args.shell else (lambda *_: stop.set()))
+
+    # IPython can leave the terminal in raw mode when it is terminated.
+    tty_state = termios.tcgetattr(sys.stdin) if args.shell else None
+    if log is not None:
+        say(f"logging {'Vite' if args.shell else 'both servers'} to {args.log.resolve()}")
+    procs: dict[str, subprocess.Popen] = {}
+    status = 0
+    try:
+        for name, (command, options) in servers.items():
+            procs[name] = subprocess.Popen(command, **options)
+            say(f"started {name} (pid {procs[name].pid})")
+        while not stop.wait(0.5):
+            exited = [name for name, proc in procs.items() if proc.poll() is not None]
+            if exited:
+                for name in exited:
+                    say(f"{name} exited with status {procs[name].returncode}")
+                # Leaving the shell is the normal way to end a --shell session.
+                leaving = args.shell and exited == ["backend"] and procs["backend"].returncode == 0
+                status = 0 if leaving else 1
+                break
+        else:
+            say("stopping")
+    finally:
+        stop_servers(procs, args.shell, say)
+        if tty_state is not None:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, tty_state)
+        if log is not None:
+            log.close()
+    return status
+
+
+if __name__ == "__main__":
+    sys.exit(main())

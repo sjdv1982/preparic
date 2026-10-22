@@ -4,8 +4,10 @@ Use ``python -i backend.py`` to leave the context available in an interactive
 prompt; call ``close_context()`` when you are done.
 """
 
+import atexit
 import json
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -107,16 +109,41 @@ def close_context() -> None:
     seamless.close()
 
 
+def _interactive() -> bool:
+    """True under ``python -i`` and under ``ipython -i`` (which leaves sys.flags alone)."""
+    if sys.flags.interactive:
+        return True
+    ipython = sys.modules.get("IPython")
+    return ipython is not None and ipython.get_ipython() is not None
+
+
+def _close_on_sigterm(signum, frame) -> None:
+    """Close the context, then die from SIGTERM as if it had not been handled.
+
+    Raising SystemExit instead makes prompt_toolkit (IPython) print a traceback.
+    """
+    close_context()
+    signal.signal(signum, signal.SIG_DFL)
+    os.kill(os.getpid(), signum)
+
+
 ctx: Context | None = None
 
 
 if __name__ == "__main__":
     ctx = build_context()
+    # Close when the interpreter exits, e.g. through exit() in a shell. These
+    # run before seamless's own atexit hook, which would warn. They are
+    # registered as objects, since IPython clears this module's globals before
+    # atexit hooks run; both are safe to call again after close_context().
+    atexit.register(seamless.close)
+    atexit.register(ctx.close)
+    signal.signal(signal.SIGTERM, _close_on_sigterm)
     print(f"PDB code share: {ctx.pdbcode.share.url}")
     print(f"Biounit share: {ctx.biounit.share.url}")
     print(f"CIF share: {ctx.cif.share.url}")
     print(f"Ranges share: {ctx.ranges.share.url}")
-    if not sys.flags.interactive:
+    if not _interactive():
         try:
             input("Press Enter to stop the Seamless context... ")
         except EOFError:

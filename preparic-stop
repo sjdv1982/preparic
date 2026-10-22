@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Stop every running preparic-start, and with it the backend and Vite servers.
+
+# Matches "python3 /path/to/preparic-start [args]", the command line of a
+# preparic-start launched through its shebang.
+pattern='^([^ ]*/)?python[0-9.]* +([^ ]*/)?preparic-start( |$)'
+
+pids=$(pgrep -f "$pattern")
+if [ -z "$pids" ]; then
+    echo "preparic-stop: preparic-start is not running"
+    exit 0
+fi
+
+echo "preparic-stop: stopping preparic-start (pid $(echo $pids))"
+kill -TERM $pids
+
+# preparic-start waits up to 20s for each server; allow it some margin.
+for _ in $(seq 150); do
+    pgrep -f "$pattern" > /dev/null || exit 0
+    sleep 0.2
+done
+
+echo "preparic-stop: still running after 30s; killing it" >&2
+pkill -KILL -f "$pattern"

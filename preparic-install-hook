@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Make "conda activate" put this directory on PATH (and "conda deactivate"
+# take it off again), so preparic-start, preparic-stop and preparic-restart
+# run from anywhere. conda reserves PATH in environment.yml, so this has to be
+# an activate.d hook, installed once. Run it inside the activated preparic env,
+# or pass the env's prefix as the argument.
+
+set -euo pipefail
+
+dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+prefix=${1:-${CONDA_PREFIX:-}}
+if [ -z "$prefix" ] || { [ $# -eq 0 ] && [ "${CONDA_DEFAULT_ENV:-}" = base ]; }; then
+    echo "preparic-install-hook: activate the preparic conda env first, or pass its prefix" >&2
+    exit 1
+fi
+
+mkdir -p "$prefix/etc/conda/activate.d" "$prefix/etc/conda/deactivate.d"
+printf 'export PATH=%q${PATH:+:$PATH}\n' "$dir" \
+    > "$prefix/etc/conda/activate.d/preparic-path.sh"
+printf '_preparic_dir=%q\nPATH=$(printf %%s "$PATH" | tr : "\\n" | grep -vxF -- "$_preparic_dir" | paste -sd: -)\nexport PATH\nunset _preparic_dir\n' "$dir" \
+    > "$prefix/etc/conda/deactivate.d/preparic-path.sh"
+echo "preparic-install-hook: $dir will be on PATH in $prefix after the next activation"

@@ -17,6 +17,7 @@ npm run dev
 ./preparic-install-hook   # once, in the activated env: puts this directory on PATH on activation
 preparic-start            # backend + Vite as subprocesses, output to the terminal
 preparic-start --log      # same, but output of both goes to preparic.log (--log FILE for another file)
+preparic-start --log --shell  # only Vite logs; the backend runs in `ipython -i` (else `python -i`) on the terminal, with `ctx` available. Exit the shell to stop both
 preparic-stop             # stops any running preparic-start, and with it both servers
 preparic-restart [--log]  # preparic-stop, then preparic-start with the same options
 ```
