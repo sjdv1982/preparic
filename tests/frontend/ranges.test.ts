@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { addRow, createRangeRow, moveRow, normalizeLeavingRow, normalizeRow, removeRow, updateRow, validateRows } from '../src/lib/ranges';
-import type { ChainInfo, RangeRow } from '../src/lib/types';
+import { addRow, createRangeRow, moveRow, normalizeLeavingRow, normalizeRow, removeRow, updateRow, validateRows } from '../../src/lib/ranges';
+import type { ChainInfo, RangeRow } from '../../src/lib/types';
 
 const chains: ChainInfo[] = [{
   name: 'A', labelAsymId: 'A', instanceId: '1_555', seqIds: new Set([1, 2, 10, 20]), seqMin: 1, seqMax: 20,

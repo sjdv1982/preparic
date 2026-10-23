@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nameChains, type ChainUnitInput } from '../src/lib/chains';
+import { nameChains, type ChainUnitInput } from '../../src/lib/chains';
 
 function copy(labelAsymId: string, instanceId: string, isIdentity: boolean, seqIds = [1, 2, 3]): ChainUnitInput {
   return { labelAsymId, instanceId, isIdentity, seqIds };

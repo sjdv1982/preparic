@@ -13,5 +13,6 @@ dependencies:
   - numpy
   - scipy
   - pdb2pqr
+  - pytest
 pip:
   - seamless-suite

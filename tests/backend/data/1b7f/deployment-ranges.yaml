@@ -1,0 +1,13 @@
+"ranges":
+  - "chain": "A"
+    "start": 1
+    "end": 12
+    "always_visible": false
+  - "chain": "C"
+    "start": 2
+    "end": 80
+    "always_visible": true
+  - "chain": "C"
+    "start": 90
+    "end": 168
+    "always_visible": true

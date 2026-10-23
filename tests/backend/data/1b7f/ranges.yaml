@@ -1,0 +1,10 @@
+ranges:
+- chain: A
+  start: 1
+  end: 4
+- chain: C
+  start: 2
+  end: 8
+- chain: C
+  start: 90
+  end: 96

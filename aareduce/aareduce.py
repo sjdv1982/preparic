@@ -523,6 +523,7 @@ parser.add_argument(
 parser.add_argument("--startatom", help="Set atom number of first atom", type=int, default=1)
 parser.add_argument(
     "--no-renum",
+    "--no-renumbering",
     dest="no_renum",
     help="Preserve the residue numbers and chains of the input PDB, instead of renumbering all residues sequentially. Mutually exclusive with --chain and --startres",
     action="store_true",

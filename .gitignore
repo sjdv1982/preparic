@@ -6,5 +6,6 @@ coverage/
 .DS_Store
 deployment-mounts/
 __pycache__/
+.pytest_cache/
 .serena/
 *.log

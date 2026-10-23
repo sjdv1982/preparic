@@ -27,3 +27,31 @@ The backend needs the `seamless` and `seamless_workflow` packages, which `enviro
 The viewer needs a browser with WebGL enabled. Use `npm run check`, `npm test`, and `npm run build` for local verification.
 
 For a quick Stage 2 test, open the app with `?pdb=1B7F&continue=1`; it loads the first biological unit and advances after the viewer is ready.
+
+## Tests
+
+Run tests in the `preparic` conda environment (`pytest` is included in
+`environment.yml`; update an existing environment if necessary):
+
+```sh
+conda activate preparic
+npm test                       # tests/frontend: Vitest
+npm run test:backend            # tests/backend: pytest, including native Bash tests
+python -m pytest -m 'not integration'  # direct Python and Bash checks
+python -m pytest -m integration        # standalone Seamless transformations
+bash tests/backend/test_range_pdbs_aareduce.sh  # native Bash suite by itself
+```
+
+The direct Python tests are unit tests. The Bash suite includes isolated dispatch
+tests with a fake reducer, plus a script test using the real aareduce/PDB2PQR tools.
+The integration tests build standalone Seamless `Transformer`/`Transformation`
+objects with the code, celltypes and `preparic` conda environment used by
+`backend.py`. They test individual steps and the extraction-to-reduction chain
+without workflow Contexts, mounts, share servers or remote services. Persistent
+caching is disabled so previous deployments cannot supply cached results.
+
+Fixtures are checked into `tests/backend/data/1b7f`; tests do not read live
+deployment files or download data. One strict expected failure records an
+upstream Seamless error when materializing an empty-list transformation result
+(`Checksum.resolution` creates a trivial Buffer without its checksum). The
+direct empty-input checks and the empty Bash transformation still run normally.
