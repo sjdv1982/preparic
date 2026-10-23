@@ -25,6 +25,7 @@ PDBCODE_PATH = MOUNT_DIRECTORY / "pdbcode.txt"
 BIOUNIT_PATH = MOUNT_DIRECTORY / "biounit.json"
 RANGES_PATH = MOUNT_DIRECTORY / "ranges.yaml"
 PDBS_PATH = MOUNT_DIRECTORY / "pdbs"
+PDBS_AA_PATH = MOUNT_DIRECTORY / "pdbs-aa"
 
 
 def _initial_pdb_code(path: Path) -> str:
@@ -117,8 +118,11 @@ def build_context() -> Context:
         context.aareduce_ranges = aareduce_ranges
         context.aareduce_ranges.pins.pdbs = context.range_pdb_files
         context.aareduce_ranges.pins.aareduce = context.aareduce_files
+        context.aareduce_ranges.celltypes.pdbs = "folder"
+        context.aareduce_ranges.celltypes.aareduce = "folder"
         context.aareduce_ranges.celltypes.result = "folder"
-        context.range_pdb_files_reduced = context.aareduce_ranges.result
+        context.range_pdb_files_aa = context.aareduce_ranges.result
+        context.range_pdb_files_aa.mount(PDBS_AA_PATH, mode="w")
 
         context.pdbcode.share(readonly=False)
         context.biounit.share(readonly=False)
