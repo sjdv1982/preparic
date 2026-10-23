@@ -4,10 +4,10 @@
   import Stage3Stackings from './components/Stage3Stackings.svelte';
   import Viewer from './components/Viewer.svelte';
   import { enterStage2, enterStage3, appState, invalidateStackingState, returnToStage1, returnToStage2 } from './lib/state.svelte';
-  import { cancelSharedCifWrite, seamlessState, setSharedBiounitIndex, setSharedCif, setSharedPdbCode, setSharedRangeRows, setSharedRangeSpecs } from './lib/seamless.svelte';
+  import { cancelSharedCifWrite, seamlessState, setSharedBiounitIndex, setSharedCif, setSharedPdbCode, setSharedRangeRows, setSharedRangeSpecs, setSharedStackingSelection } from './lib/seamless.svelte';
   import { findChain } from './lib/chains';
   import { cloneRangeRows, updateRow } from './lib/ranges';
-  import { observeStage2RangeRows, resolveSelectedStackings } from './lib/stackings';
+  import { mergeStackings, observeStage2RangeRows, resolveSelectedStackings } from './lib/stackings';
   import type { ChainKey, PickInfo, RangeRow, RangeSpec } from './lib/types';
   import type { MolViewer } from './lib/molstar/viewer';
 
@@ -19,6 +19,8 @@
   }
 
   let seamlessStateInitialized = false;
+  let startupStageRestoreHandled = false;
+  let startupStage2Restored = false;
   let appliedRangeRevision = 0;
   let rangeObservation = { active: false, signature: null as string | null };
 
@@ -145,16 +147,58 @@
     enterStage2(seamlessState.rangesReady ? seamlessState.rangeRows : undefined);
   }
 
+  $effect(() => {
+    if (startupStageRestoreHandled
+      || !seamlessState.ready
+      || !seamlessStateInitialized
+      || !appState.structureReady
+      || appState.loading
+      || !seamlessState.rangesReady) return;
+
+    if (!startupStage2Restored) {
+      if (appState.stage === 3) {
+        startupStageRestoreHandled = true;
+        return;
+      }
+      startupStage2Restored = true;
+      if (seamlessState.rangeRows.length === 0) {
+        startupStageRestoreHandled = true;
+        return;
+      }
+      if (appState.stage === 1) proceedToRanges();
+    }
+
+    if (!seamlessState.stackingsReady || !seamlessState.stackingSelectionReady) return;
+    startupStageRestoreHandled = true;
+    if (appState.stage !== 2) return;
+
+    const hasSavedStackingSelection = seamlessState.stackingSelectionNonEmpty
+      && !seamlessState.stackingSelectionError
+      && appState.stackings.length > 0
+      && appState.stackingSelection.length === appState.stackings.length;
+    if (hasSavedStackingSelection) enterStage3();
+  });
+
   function goBack() {
+    setSharedRangeRows([]);
+    setSharedRangeSpecs([]);
+    setSharedStackingSelection([]);
     returnToStage1();
     void viewer?.render({ focus: null });
   }
 
   function complete(): void {
+    if (!seamlessState.stackingSelectionReady || !seamlessState.stackingSelectionNonEmpty) {
+      const selection = mergeStackings([], [], appState.stackings).stackingSelection;
+      appState.stackingSelection = selection;
+      setSharedStackingSelection(selection);
+    }
     enterStage3();
   }
 
   function backToRanges(): void {
+    setSharedStackingSelection([]);
+    appState.stackingSelection = appState.stackings.map(() => false);
     returnToStage2();
   }
 

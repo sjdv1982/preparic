@@ -71,6 +71,7 @@ export const seamlessState = $state({
   stackingsError: '',
   stackingRevision: 0,
   stackingSelectionReady: false,
+  stackingSelectionNonEmpty: false,
   stackingSelectionRevision: 0,
   stackingSelectionError: '',
   stackingSelectionPendingWrite: false,
@@ -208,7 +209,7 @@ function writeStackingSelection(selection: readonly boolean[]): boolean {
     seamlessState.stackingSelectionError = 'The stacking selection must contain only booleans.';
     return false;
   }
-  if (selection.length !== appState.stackings.length) {
+  if (selection.length !== appState.stackings.length && selection.length !== 0) {
     seamlessState.stackingSelectionError = 'The stacking selection does not match the current table length.';
     return false;
   }
@@ -236,6 +237,7 @@ function writeStackingSelection(selection: readonly boolean[]): boolean {
     return true;
   }
   if (pendingStackingSelectionWriteSignature === undefined
+    && currentSelection === null
     && backendStackingSelectionSignature === serialized) {
     seamlessState.stackingSelectionError = '';
     return true;
@@ -272,6 +274,11 @@ function receiveStackings(value: SharedValue, marker?: number): void {
     return;
   }
 
+  const selectionCell = client?.stacking_selection;
+  if (!seamlessState.stackingSelectionReady && selectionCell?.value !== undefined) {
+    receiveStackingSelection(selectionCell.value, selectionCell.marker);
+  }
+
   seamlessState.stackingsReady = true;
   seamlessState.stackingsError = '';
   if (appState.staleStackingRevision !== null
@@ -287,31 +294,26 @@ function receiveStackings(value: SharedValue, marker?: number): void {
     && !hasQueuedSelection) return;
   stackingsSignature = signature;
 
+  const hasEmptyBackendSelection = seamlessState.stackingSelectionReady
+    && !seamlessState.stackingSelectionNonEmpty;
   const merged = mergeStackings(appState.stackings, appState.stackingSelection, stackings);
   appState.stackings = merged.stackings;
-  appState.stackingSelection = merged.stackingSelection;
+  appState.stackingSelection = hasEmptyBackendSelection
+    ? stackings.map(() => false)
+    : merged.stackingSelection;
 
-  let shouldPushSelection = true;
-  if (pendingBackendStackingSelection !== undefined) {
-    if (stackings.length === 0) {
-      // A queued backend selection is associated with a later non-empty table.
-      shouldPushSelection = false;
+  if (pendingBackendStackingSelection !== undefined && stackings.length > 0) {
+    const queued = pendingBackendStackingSelection;
+    pendingBackendStackingSelection = undefined;
+    if (queued.length === stackings.length) {
+      appState.stackingSelection = [...queued];
+      backendStackingSelectionSignature = JSON.stringify(queued);
+      seamlessState.stackingSelectionReady = true;
+      seamlessState.stackingSelectionError = '';
     } else {
-      const queued = pendingBackendStackingSelection;
-      pendingBackendStackingSelection = undefined;
-      if (queued.length === stackings.length) {
-        appState.stackingSelection = [...queued];
-        backendStackingSelectionSignature = JSON.stringify(queued);
-        seamlessState.stackingSelectionReady = true;
-        seamlessState.stackingSelectionError = '';
-        shouldPushSelection = false;
-      } else {
-        seamlessState.stackingSelectionError = `The queued backend selection has ${queued.length} values, but the next non-empty table has ${stackings.length} rows.`;
-      }
+      seamlessState.stackingSelectionError = `The queued backend selection has ${queued.length} values, but the next non-empty table has ${stackings.length} rows.`;
     }
   }
-
-  if (shouldPushSelection) writeStackingSelection(appState.stackingSelection);
 }
 
 function receiveStackingSelection(value: SharedValue, marker?: number): void {
@@ -321,11 +323,12 @@ function receiveStackingSelection(value: SharedValue, marker?: number): void {
   );
   const selection = parseBooleanSelection(value);
   const signature = selection === null ? sharedValueSignature(value) : JSON.stringify(selection);
-  seamlessState.stackingSelectionReady = selection !== null;
   let newerThanPendingWrite = false;
 
   if (pendingStackingSelectionWriteSignature !== undefined) {
     if (signature === pendingStackingSelectionWriteSignature) {
+      seamlessState.stackingSelectionReady = selection !== null;
+      seamlessState.stackingSelectionNonEmpty = selection !== null && selection.length > 0;
       backendStackingSelectionSignature = signature;
       pendingStackingSelectionWriteSignature = undefined;
       pendingStackingSelectionWriteMarker = undefined;
@@ -344,12 +347,20 @@ function receiveStackingSelection(value: SharedValue, marker?: number): void {
     pendingStackingSelectionWriteMarker = undefined;
     seamlessState.stackingSelectionPendingWrite = false;
   }
+  seamlessState.stackingSelectionReady = selection !== null;
+  seamlessState.stackingSelectionNonEmpty = selection !== null && selection.length > 0;
   if (!newerThanPendingWrite && signature === backendStackingSelectionSignature) return;
   backendStackingSelectionSignature = signature;
 
   if (selection === null) {
     pendingBackendStackingSelection = undefined;
     seamlessState.stackingSelectionError = 'The shared stacking selection must be a JSON list containing only booleans.';
+    return;
+  }
+  if (selection.length === 0) {
+    pendingBackendStackingSelection = undefined;
+    appState.stackingSelection = appState.stackings.map(() => false);
+    seamlessState.stackingSelectionError = '';
     return;
   }
   if (selection.length === appState.stackings.length) {
@@ -575,5 +586,11 @@ export function setSharedStackingSelection(selection: readonly boolean[]): boole
   // An explicit checkbox edit supersedes a delayed backend list that was
   // waiting for a table of a different length.
   pendingBackendStackingSelection = undefined;
-  return writeStackingSelection(selection);
+  if (selection.length === 0) backendStackingSelectionSignature = undefined;
+  const accepted = writeStackingSelection(selection);
+  if (accepted) {
+    seamlessState.stackingSelectionReady = true;
+    seamlessState.stackingSelectionNonEmpty = selection.length > 0;
+  }
+  return accepted;
 }
