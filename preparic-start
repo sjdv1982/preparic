@@ -46,6 +46,11 @@ def parse_args() -> argparse.Namespace:
         "(ipython -i if available, else python -i); only Vite's output goes "
         "to the log. Requires --log",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="force Vite to rebuild its optimized dependencies",
+    )
     args = parser.parse_args()
     if args.shell and args.log is None:
         parser.error("--shell requires --log")
@@ -126,7 +131,10 @@ def main() -> int:
         stderr=subprocess.STDOUT if log else None,
         start_new_session=True,
     )
-    vite = ([npm, "run", "dev"], detached)
+    vite_command = [npm, "run", "dev"]
+    if args.force:
+        vite_command.extend(["--", "--force"])
+    vite = (vite_command, detached)
     if args.shell:
         servers = {"vite": vite, "backend": (shell_command(), dict(cwd=PROJECT_ROOT))}
     else:

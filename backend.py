@@ -74,11 +74,11 @@ def build_context() -> Context:
 
         context.pdbcode = Cell(celltype="text")
         context.pdbcode.set(_initial_pdb_code(PDBCODE_PATH))
-        context.pdbcode.mount(PDBCODE_PATH, mode="rw", authority="cell")
+        context.pdbcode.mount(PDBCODE_PATH, mode="rw", authority="file")
 
         context.biounit = Cell(celltype="plain")
         context.biounit.set(_initial_biounit_index(BIOUNIT_PATH))
-        context.biounit.mount(BIOUNIT_PATH, mode="rw", authority="cell")
+        context.biounit.mount(BIOUNIT_PATH, mode="rw", authority="file")
 
         context.cif = Cell(celltype="text")
         context.cif.set("")
@@ -86,7 +86,7 @@ def build_context() -> Context:
         initial_ranges = _initial_ranges(RANGES_PATH)
         context.ranges = Cell(celltype="yaml")
         context.ranges.set(yaml.safe_dump(initial_ranges, sort_keys=False))
-        context.ranges.mount(RANGES_PATH, mode="rw", authority="cell")
+        context.ranges.mount(RANGES_PATH, mode="rw", authority="file")
 
         # The UI keeps its mounted YAML file, while the transformer receives
         # the corresponding structured value through this plain cell.
@@ -109,11 +109,12 @@ def build_context() -> Context:
         context.aareduce_files = Cell(celltype="folder")
         context.aareduce_files.mount(PROJECT_ROOT / "aareduce", mode="r")
 
-        context.aareduce_ranges = Transformer("bash")
-        context.aareduce_ranges.code = (
+        aareduce_ranges = Transformer("bash")
+        aareduce_ranges.code = (
             PROJECT_ROOT / "range-pdbs-aareduce.sh"
         ).read_text()
-        context.aareduce_ranges.environment.set_conda_env("preparic")
+        aareduce_ranges.environment.set_conda_env("preparic")
+        context.aareduce_ranges = aareduce_ranges
         context.aareduce_ranges.pins.pdbs = context.range_pdb_files
         context.aareduce_ranges.pins.aareduce = context.aareduce_files
         context.aareduce_ranges.celltypes.result = "folder"
