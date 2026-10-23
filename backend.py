@@ -17,6 +17,7 @@ from seamless import Cell
 from seamless_transformer import Transformer
 from seamless_workflow import Context, shareserver
 from range_pdbs import _pdbs_to_folder, _ranges_to_pdb
+from detect_stacking import _detect_stacking
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -55,6 +56,53 @@ def _initial_ranges(path: Path) -> dict:
     if isinstance(value, dict) and isinstance(value.get("ranges"), list):
         return value
     return {"ranges": []}
+
+
+def _read_initial_stacking_selection(path: Path) -> tuple[list[bool], bool]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return [], False
+    if isinstance(value, list) and all(type(item) is bool for item in value):
+        return value, True
+    return [], False
+
+
+def _initial_stacking_selection(path: Path) -> list[bool]:
+    """Load only a JSON list of booleans; reject all other persisted values."""
+    value, _ = _read_initial_stacking_selection(path)
+    return value
+
+
+def _add_stacking_pipeline(
+    context: Context, mount_directory: Path | None = None
+) -> None:
+    """Wire the pre-aareduce range PDBs into a content-bound stacking step."""
+    if mount_directory is None:
+        mount_directory = MOUNT_DIRECTORY
+    context.detect_stacking = _detect_stacking
+    context.detect_stacking.celltypes.range_pdbs = "plain"
+    context.detect_stacking.celltypes.result = "plain"
+    context.detect_stacking.pins.range_pdbs = context.range_pdbs
+
+    context.stackings = Cell(celltype="plain")
+    context.stackings = context.detect_stacking.result
+    context.stackings.mount(
+        mount_directory / "stackings.json", mode="w", authority="cell"
+    )
+
+    selection_path = mount_directory / "stacking-selection.json"
+    initial_selection, selection_is_valid = _read_initial_stacking_selection(
+        selection_path
+    )
+    context.stacking_selection = Cell(celltype="plain")
+    context.stacking_selection.set(initial_selection)
+    if selection_path.exists() and not selection_is_valid:
+        # A plain mount validates JSON, not the narrower list[bool] contract.
+        # Replace an invalid initial value before the file-authoritative mount
+        # gets a chance to adopt it into the cell.
+        selection_path.write_text("[]\n", encoding="utf-8")
+    context.stacking_selection.mount(selection_path, mode="rw", authority="file")
 
 
 def build_context() -> Context:
@@ -99,6 +147,7 @@ def build_context() -> Context:
         context.ranges_to_pdb.pins.ranges = context.range_specs
         context.range_pdbs = Cell(celltype="plain")
         context.range_pdbs = context.ranges_to_pdb.result
+        _add_stacking_pipeline(context)
 
         context.pdbs_to_folder = _pdbs_to_folder
         context.pdbs_to_folder.celltypes.pdb_texts = "plain"
@@ -131,6 +180,8 @@ def build_context() -> Context:
         context.ranges.share(readonly=False)
         context.range_specs.share(readonly=False)
         context.range_pdbs.share()
+        context.stackings.share()
+        context.stacking_selection.share(readonly=False)
         context.mounts.sync(timeout=10)
         ctx = context
         return context

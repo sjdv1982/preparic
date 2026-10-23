@@ -21,6 +21,11 @@ function isDefinedRange(row: RangeRow): boolean {
   return row.alwaysVisible || row.chain !== '' || row.start !== '' || row.end !== '';
 }
 
+/** Keep range-PDB numbering aligned with the serialized Seamless range list. */
+export function definedRangeRows(rows: readonly RangeRow[]): RangeRow[] {
+  return rows.filter(isDefinedRange);
+}
+
 export function rangeDefinitionSignature(rows: RangeRow[]): string {
   return JSON.stringify(rows.filter(isDefinedRange).map(row => ({
     chain: row.chain,
@@ -39,7 +44,7 @@ export function rangeDefinitionObject(rows: RangeRow[]): {
   }>;
 } {
   return {
-    ranges: rows.filter(isDefinedRange).map(row => ({
+    ranges: definedRangeRows(rows).map(row => ({
       chain: row.chain,
       start: yamlValue(row.start),
       end: yamlValue(row.end),
@@ -82,4 +87,3 @@ export function parseRangeDefinition(source: string): RangeRow[] {
     return restored;
   });
 }
-

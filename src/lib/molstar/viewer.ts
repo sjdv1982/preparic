@@ -4,12 +4,60 @@ import { ModelSymmetry } from 'molstar/lib/mol-model-formats/structure/property/
 import { PluginBehaviors } from 'molstar/lib/mol-plugin/behavior.js';
 import { PluginContext } from 'molstar/lib/mol-plugin/context.js';
 import { DefaultPluginSpec } from 'molstar/lib/mol-plugin/spec.js';
+import { Mesh } from 'molstar/lib/mol-geo/geometry/mesh/mesh.js';
+import { MeshBuilder } from 'molstar/lib/mol-geo/geometry/mesh/mesh-builder.js';
+import { addSimpleCylinder } from 'molstar/lib/mol-geo/geometry/mesh/builder/cylinder.js';
+import { Shape } from 'molstar/lib/mol-model/shape.js';
+import { Vec3 as MolVec3 } from 'molstar/lib/mol-math/linear-algebra.js';
+import { Color } from 'molstar/lib/mol-util/color/color.js';
+import { ParamDefinition as PD } from 'molstar/lib/mol-util/param-definition.js';
+import { StateTransformer } from 'molstar/lib/mol-state/index.js';
+import { PluginStateObject as SO } from 'molstar/lib/mol-plugin-state/objects.js';
+import { ShapeRepresentation3D } from 'molstar/lib/mol-plugin-state/transforms/representation.js';
 import { StateSelection } from 'molstar/lib/mol-state/index.js';
 import { chainExpression, complementExpression, rangeExpression, sidechainRangeExpression, unionExpression } from './expressions';
+import { stackingDashSegments, type DashSegment } from './stacking-geometry';
 import { nameChains, type ChainUnitInput } from '../chains';
-import type { AssemblyInfo, ChainInfo, PickInfo, RenderSpec } from '../types';
+import { uniqueStackingParticipantRanges } from '../stackings';
+import type { AssemblyInfo, ChainInfo, PickInfo, RenderSpec, StackingViewerInput } from '../types';
 
 const RENDER_TAG = 'preparic-phase1-render';
+const StackingConnectorShape = StateTransformer.builderFactory('preparic')({
+  name: 'stacking-centroid-connectors',
+  display: 'Stacking Centroid Connectors',
+  from: SO.Root,
+  to: SO.Shape.Provider,
+  params: { segments: PD.Value([] as DashSegment[], { isHidden: true }) },
+})({
+  apply({ params }) {
+    const meshState = MeshBuilder.createState();
+    meshState.currentGroup = 0;
+    for (const segment of params.segments) {
+      addSimpleCylinder(meshState, MolVec3.create(...segment.start), MolVec3.create(...segment.end), {
+        radiusTop: 0.045,
+        radiusBottom: 0.045,
+        radialSegments: 8,
+      });
+    }
+    const mesh = MeshBuilder.getMesh(meshState);
+    return new SO.Shape.Provider({
+      label: 'Stacking centroid connectors',
+      data: mesh,
+      params: Mesh.Params,
+      getShape: (_ctx, geometry) => Shape.create(
+        'Stacking centroid connectors',
+        geometry,
+        geometry,
+        () => Color(0xf4b942),
+        () => 1,
+        () => 'Centroid-to-centroid stacking interaction',
+        undefined,
+        1,
+      ),
+      geometryUtils: Mesh.Utils,
+    }, { label: 'Stacking centroid connectors' });
+  },
+});
 
 export class MolViewer {
   readonly plugin: PluginContext;
@@ -245,6 +293,7 @@ export class MolViewer {
           color: 'chain-id',
         }, { tag: RENDER_TAG });
       }
+      if (token === this.renderToken) await this.renderStackingOverlays(spec.stackings ?? [], token);
       return;
     }
 
@@ -294,6 +343,39 @@ export class MolViewer {
       color: 'chain-id',
       ...(spec.others === 'transparent' ? { typeParams: { alpha: 0.2 } } : {}),
     }, { tag: RENDER_TAG });
+  }
+
+  private async renderStackingOverlays(stackings: readonly StackingViewerInput[], token: number): Promise<void> {
+    if (stackings.length === 0 || token !== this.renderToken || !this.structureRef) return;
+
+    const participantRanges = uniqueStackingParticipantRanges(stackings);
+    if (participantRanges.length > 0) {
+      const participants = await this.plugin.builders.structure.tryCreateComponentFromExpression(
+        this.structureRef,
+        unionExpression(participantRanges.map(rangeExpression)),
+        'stage3-stacking-participants',
+        { label: 'Selected stacking participants', tags: [RENDER_TAG] },
+      );
+      if (participants && token === this.renderToken) {
+        await this.plugin.builders.structure.representation.addRepresentation(participants, {
+          type: 'ball-and-stick',
+          color: 'element-symbol',
+          typeParams: { visuals: ['intra-bond'] },
+        }, { tag: RENDER_TAG });
+      }
+    }
+
+    if (token !== this.renderToken) return;
+    const segments = stackings.flatMap(stacking => stackingDashSegments(
+      stacking.rnaCentroid,
+      stacking.proteinCentroid,
+    ));
+    if (segments.length === 0) return;
+    await this.plugin.state.data.build()
+      .toRoot()
+      .apply(StackingConnectorShape, { segments }, { tags: [RENDER_TAG] })
+      .apply(ShapeRepresentation3D, {}, { tags: [RENDER_TAG] })
+      .commit();
   }
 
   private async deleteRenderTaggedNodes(): Promise<void> {

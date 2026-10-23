@@ -1,4 +1,4 @@
-export type Stage = 1 | 2;
+export type Stage = 1 | 2 | 3;
 
 export interface ChainKey {
   labelAsymId: string;
@@ -50,10 +50,33 @@ export interface RangeSpec extends ChainKey {
   end: number;
 }
 
+export type Vec3 = [number, number, number];
+
+export interface Stacking {
+  rna_resname: string;
+  rna_resid: number;
+  protein_range_pdb_id: number;
+  protein_resid: number;
+  distance: number;
+  tilt_angle: number;
+  slip_angle: number;
+  rna_centroid: Vec3;
+  protein_centroid: Vec3;
+}
+
+/** Resolved participant geometry passed to the viewer by the stage controller. */
+export interface StackingViewerInput {
+  rna: RangeSpec;
+  protein: RangeSpec;
+  rnaCentroid: Vec3;
+  proteinCentroid: Vec3;
+}
+
 export interface RenderSpec {
   focus: ChainKey | null;
   range?: RangeSpec;
   alwaysVisible?: RangeSpec[];
   sidechainRanges?: RangeSpec[];
+  stackings?: StackingViewerInput[];
   others?: OtherChainsMode;
 }

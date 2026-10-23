@@ -41,6 +41,6 @@
 
   <div class="stage-footer stage-footer-split">
     <button class="button button-secondary" onclick={onBack}><span aria-hidden="true">←</span> Back</button>
-    <button class="button button-primary" onclick={finish}>OK <span aria-hidden="true">✓</span></button>
+    <button class="button button-primary" onclick={finish}>Complete <span aria-hidden="true">✓</span></button>
   </div>
 </section>

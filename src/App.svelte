@@ -1,11 +1,13 @@
 <script lang="ts">
   import Stage1Structure from './components/Stage1Structure.svelte';
   import Stage2Ranges from './components/Stage2Ranges.svelte';
+  import Stage3Stackings from './components/Stage3Stackings.svelte';
   import Viewer from './components/Viewer.svelte';
-  import { enterStage2, appState, returnToStage1 } from './lib/state.svelte';
+  import { enterStage2, enterStage3, appState, invalidateStackingState, returnToStage1, returnToStage2 } from './lib/state.svelte';
   import { cancelSharedCifWrite, seamlessState, setSharedBiounitIndex, setSharedCif, setSharedPdbCode, setSharedRangeRows, setSharedRangeSpecs } from './lib/seamless.svelte';
   import { findChain } from './lib/chains';
   import { cloneRangeRows, updateRow } from './lib/ranges';
+  import { observeStage2RangeRows, resolveSelectedStackings } from './lib/stackings';
   import type { ChainKey, PickInfo, RangeRow, RangeSpec } from './lib/types';
   import type { MolViewer } from './lib/molstar/viewer';
 
@@ -18,6 +20,7 @@
 
   let seamlessStateInitialized = false;
   let appliedRangeRevision = 0;
+  let rangeObservation = { active: false, signature: null as string | null };
 
   $effect(() => {
     if (!seamlessState.ready) return;
@@ -67,6 +70,12 @@
     }
     setSharedRangeRows(appState.rows);
     setSharedRangeSpecs(appState.rows);
+  });
+
+  $effect(() => {
+    const result = observeStage2RangeRows(rangeObservation, appState.stage, appState.rows);
+    rangeObservation = result.observation;
+    if (result.changed) invalidateStackingState(seamlessState.stackingRevision);
   });
 
   let viewer = $state<MolViewer | null>(null);
@@ -142,11 +151,26 @@
   }
 
   function complete(): void {
-    // Reserved for the following phase, which will consume this selection.
+    enterStage3();
+  }
+
+  function backToRanges(): void {
+    returnToStage2();
   }
 
   $effect(() => {
     if (!viewer) return;
+    if (appState.stage === 3) {
+      viewer.setGranularity('residue');
+      const selectedStackings = resolveSelectedStackings(
+        appState.stackings,
+        appState.stackingSelection,
+        appState.rows,
+        appState.chains,
+      );
+      void viewer.render({ focus: null, stackings: selectedStackings });
+      return;
+    }
     if (appState.stage !== 2) {
       viewer.setGranularity('chain');
       void viewer.render({ focus: null });
@@ -210,9 +234,14 @@
           <span><strong>Structure</strong><small>Choose a PDB unit</small></span>
         </div>
         <div class="progress-rail"></div>
-        <div class:current={appState.stage === 2} class="progress-step">
-          <span class="progress-number">02</span>
+        <div class:current={appState.stage === 2} class:complete={appState.stage > 2} class="progress-step">
+          <span class="progress-number">{appState.stage > 2 ? '✓' : '02'}</span>
           <span><strong>Ranges</strong><small>Select residues</small></span>
+        </div>
+        <div class="progress-rail"></div>
+        <div class:current={appState.stage === 3} class="progress-step">
+          <span class="progress-number">03</span>
+          <span><strong>Stackings</strong><small>Review interactions</small></span>
         </div>
       </div>
 
@@ -222,17 +251,19 @@
 
       {#if appState.stage === 1}
         <Stage1Structure {viewer} {startupPdbId} {autoContinue} onContinue={proceedToRanges} />
-      {:else}
+      {:else if appState.stage === 2}
         <Stage2Ranges onBack={goBack} onComplete={complete} />
+      {:else}
+        <Stage3Stackings onBack={backToRanges} />
       {/if}
 
-      <div class="sidebar-bottom"><span class="sidebar-bottom-mark">P</span><span>Phase 1 · Local selection</span><span class="sidebar-bottom-status">●</span></div>
+      <div class="sidebar-bottom"><span class="sidebar-bottom-mark">P</span><span>{appState.stage === 3 ? 'Stage 3 · Stacking review' : 'Phase 1 · Local selection'}</span><span class="sidebar-bottom-status">●</span></div>
     </aside>
 
     <section class="viewer-pane" aria-label="Molecular viewer workspace">
       <div class="viewer-toolbar">
         <div class="viewer-title"><span class="viewer-title-icon">◈</span><span>{appState.pdbId || 'Structure viewer'}</span>{#if appState.structureReady}<span class="loaded-badge">LOADED</span>{/if}</div>
-        <div class="viewer-toolbar-right"><span class="viewer-mode"><span>●</span> {appState.stage === 1 ? 'Structure view' : 'Pick mode'}</span><span class="toolbar-divider"></span><span class="viewer-version">Mol*</span></div>
+        <div class="viewer-toolbar-right"><span class="viewer-mode"><span>●</span> {appState.stage === 1 ? 'Structure view' : appState.stage === 2 ? 'Pick mode' : 'Interaction review'}</span><span class="toolbar-divider"></span><span class="viewer-version">Mol*</span></div>
       </div>
       {#if seamlessState.rangeTransformError}
         <div class="viewer-error" role="alert"><strong>Range extraction failed</strong><span>{seamlessState.rangeTransformError}</span></div>

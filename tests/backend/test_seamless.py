@@ -8,6 +8,7 @@ from seamless import Checksum
 from seamless_transformer import Transformer, delayed
 from seamless_transformer.transformation_class import Transformation, TransformationError
 
+from detect_stacking import _detect_stacking
 from range_pdbs import _pdbs_to_folder, _ranges_to_pdb
 from conftest import PROJECT_ROOT
 
@@ -113,3 +114,38 @@ def test_extraction_to_reduction_dependencies(cif_text, range_specs, expected_pd
     pdbs = folder_transformation(extraction)
     # Pass handles all the way through; the final run executes dependencies.
     assert_reduced(folder_contents(reducer(pdbs, aareduce_folder)), expected_pdbs)
+
+
+def test_extraction_to_stacking_dependency_is_content_bound(
+    cif_text, range_specs, expected_pdbs
+):
+    extraction = delayed(_ranges_to_pdb).build(cif=cif_text, ranges=range_specs)
+    detector = delayed(_detect_stacking)
+
+    stacking_transformation = detector.build(range_pdbs=extraction)
+    assert stacking_transformation.run() == _detect_stacking(expected_pdbs)
+
+
+def test_wrapped_stacking_validation_failure():
+    transformation = delayed(_detect_stacking).build(range_pdbs="not a list")
+    with pytest.raises(TransformationError, match="range_pdbs must be provided"):
+        transformation.run()
+
+
+def test_wrapped_stacking_identity_and_result_are_deterministic(expected_pdbs):
+    first = delayed(_detect_stacking).build(range_pdbs=expected_pdbs)
+    second = delayed(_detect_stacking).build(range_pdbs=expected_pdbs)
+    first.construct()
+    second.construct()
+
+    assert first.transformation_checksum == second.transformation_checksum
+    assert first.run() == second.run() == _detect_stacking(expected_pdbs)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AttributeError,
+    reason="Seamless Checksum.resolution creates a trivial empty-list Buffer without calculating its checksum",
+)
+def test_wrapped_stacking_empty_pipeline_is_stable():
+    assert delayed(_detect_stacking).build(range_pdbs=[]).run() == []
