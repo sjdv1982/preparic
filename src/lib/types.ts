@@ -1,4 +1,4 @@
-export type Stage = 1 | 2 | 3;
+export type Stage = 1 | 2 | 3 | 4 | 5 | 6;
 
 export interface ChainKey {
   labelAsymId: string;

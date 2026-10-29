@@ -11,14 +11,15 @@ function row(values: Partial<RangeRow> = {}): RangeRow {
 }
 
 describe('range row normalization', () => {
-  it('swaps start and end when leaving a row, but not when changing cells within it', () => {
+  it('keeps reversed endpoints unchanged so validation can reject them', () => {
     const current = row();
     const rows = [current];
     const active = { rowId: current.id, column: 'start' as const };
     expect(normalizeLeavingRow(rows, active, { rowId: current.id, column: 'end' })).toBe(rows);
-    expect(normalizeLeavingRow(rows, active, null)[0]).toMatchObject({ start: '2', end: '10' });
-    expect(normalizeRow(current)).toMatchObject({ start: '2', end: '10' });
+    expect(normalizeLeavingRow(rows, active, null)[0]).toMatchObject({ start: '10', end: '2' });
+    expect(normalizeRow(current)).toMatchObject({ start: '10', end: '2' });
     expect(updateRow(rows, current.id, { end: '20' })[0]).toMatchObject({ start: '10', end: '20' });
+    expect(validateRows([current], chains).map(issue => issue.column)).toEqual(['end']);
   });
 });
 
@@ -30,7 +31,8 @@ describe('validateRows', () => {
   it('reports unknown chains, missing cells on submit, and residues outside a chain', () => {
     const result = validateRows([row({ chain: 'Z', start: '', end: '3' })], chains);
     expect(result.map(issue => issue.column)).toEqual(['chain', 'start']);
-    expect(validateRows([row({ start: '99', end: '2' })], chains).map(issue => issue.column)).toEqual(['start']);
+    expect(validateRows([row({ start: '99', end: '2' })], chains).map(issue => issue.column)).toEqual(['start', 'end']);
+    expect(validateRows([row({ start: '2', end: '' })], chains).map(issue => issue.column)).toEqual(['end']);
     expect(validateRows([row({ chain: '', start: '', end: '' })], chains, false)).toEqual([]);
   });
 });

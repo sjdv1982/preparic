@@ -9,7 +9,11 @@ def _ranges_to_pdb(cif: str, ranges: dict) -> list[str]:
 
     from Bio.PDB import MMCIFParser, PDBIO
 
-    range_specs = ranges.get("ranges") if isinstance(ranges, dict) else None
+    # T0 now publishes the canonical S5 envelope. Keep the legacy field as a
+    # read-only compatibility path for callers outside the shared project.
+    range_specs = None
+    if isinstance(ranges, dict):
+        range_specs = ranges.get("rows") if ranges.get("schema") == 1 else ranges.get("ranges")
     if not isinstance(range_specs, list):
         raise ValueError("The ranges cell must contain a ranges list.")
     if not range_specs:

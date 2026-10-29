@@ -38,7 +38,7 @@ button { color: inherit; }
 .topbar-dot { display: block; width: 5px; height: 5px; border-radius: 50%; background: #7daeff; box-shadow: 0 0 11px #5493fa; }
 .phase-pill { color: #99c4ff; border: 1px solid rgba(105, 158, 229, .24); border-radius: 5px; padding: 5px 8px; font: 500 9px 'DM Mono', monospace; letter-spacing: .1em; background: rgba(67, 117, 185, .08); }
 
-.workspace { display: grid; grid-template-columns: minmax(350px, 408px) minmax(0, 1fr); height: calc(100% - 58px); }
+.workspace { position: relative; display: grid; grid-template-columns: minmax(350px, 408px) minmax(0, 1fr); height: calc(100% - 58px); }
 .sidebar { position: relative; display: flex; flex-direction: column; background: #101925; border-right: 1px solid var(--line); min-height: 0; z-index: 2; }
 .stage-progress { padding: 28px 32px 25px; display: grid; gap: 0; border-bottom: 1px solid var(--line); }
 .progress-step { display: flex; gap: 13px; align-items: center; color: #6e7b8d; min-height: 42px; }
@@ -91,6 +91,11 @@ button { color: inherit; }
 .sidebar-bottom-status { margin-left: auto; color: #53bd92; font-size: 8px; }
 .viewer-error { background: #342122; padding: 11px 13px; margin: 13px 20px 0; border: 1px solid rgba(212, 102, 95, .24); border-radius: 7px; display: grid; gap: 5px; color: #eaa7a2; font-size: 10px; }
 .viewer-error strong { color: #f0c4c0; font-size: 11px; }
+.sync-overlay { position: absolute; z-index: 5; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(7, 12, 20, .34); backdrop-filter: blur(1.5px); }
+.sync-overlay-card { display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: center; gap: 6px 10px; max-width: 410px; padding: 15px 18px; border: 1px solid rgba(130, 185, 255, .25); border-radius: 9px; background: rgba(16, 25, 37, .94); box-shadow: 0 12px 36px rgba(0, 0, 0, .3); color: #b7c6d9; font-size: 11px; line-height: 1.5; }
+.sync-overlay-card strong { color: #e6eef8; font-size: 12px; }
+.sync-overlay-card > span:last-child { grid-column: 2; }
+.sync-overlay-spinner { width: 14px; height: 14px; grid-row: span 2; border: 1.5px solid rgba(164, 199, 239, .25); border-top-color: #acd0ff; border-radius: 50%; animation: spin .8s linear infinite; }
 
 .stage-two-content { padding-top: 26px; }
 .stage-two-content .stage-description { margin-bottom: 18px; }

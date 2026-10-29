@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { appState } from '../lib/state.svelte';
-  import { cancelSharedCifWrite, setSharedBiounitIndex, setSharedPdbCode } from '../lib/seamless.svelte';
+  import { cancelSharedCifWrite, captureSharedStructureTarget, commitSharedStructure, readSharedCif, seamlessState, setSharedBiounitIndex, setSharedPdbCode, sharedStructureTargetIsCurrent } from '../lib/seamless.svelte';
   import type { MolViewer } from '../lib/molstar/viewer';
 
   let { viewer, onContinue, startupPdbId, autoContinue }: {
@@ -19,6 +19,10 @@
 
   $effect(() => {
     if (!viewer) return;
+    if (!seamlessState.ready) {
+      lastHandledPdbId = null;
+      return;
+    }
     const id = appState.pdbId.trim().toUpperCase();
     if (appState.assemblies.length > 0) {
       lastHandledPdbId = id;
@@ -42,16 +46,9 @@
     const request = ++requestId;
     if (debounce) clearTimeout(debounce);
     appState.pdbId = id;
-    appState.assemblies = [];
-    appState.assemblyId = '';
     appState.structureReady = false;
     appState.error = '';
     appState.loading = false;
-    appState.stage = 1;
-    appState.rows = [];
-    appState.chains = [];
-    appState.activeCell = null;
-    if (viewer) void viewer.clear();
     if (!pdbPattern.test(id)) return;
 
     const continueAfterLoad = Boolean(
@@ -71,19 +68,42 @@
 
   async function loadEntry(id: string, request: number, continueAfterLoad = false) {
     if (!viewer || request !== requestId) return;
+    const structureTarget = captureSharedStructureTarget();
+    if (!structureTarget.liveAtIssue) {
+      appState.error = 'The shared project is not live; reconnect before loading a structure.';
+      seamlessState.syncNotice = appState.error;
+      appState.loading = false;
+      return;
+    }
     appState.loading = true;
     appState.error = '';
     let shouldContinue = false;
+    let committed = false;
     try {
-      const assemblies = await viewer.loadPdb(id);
-      if (request !== requestId || !assemblies) return;
-      appState.assemblies = assemblies;
+      const isCurrentTarget = () => request === requestId && sharedStructureTargetIsCurrent(structureTarget);
+      const assemblies = seamlessState.pdbCode === id
+        ? await viewer.loadCif(await readSharedCif(), id, isCurrentTarget)
+        : await viewer.loadPdb(id, isCurrentTarget);
+      if (request !== requestId) return;
+      if (!sharedStructureTargetIsCurrent(structureTarget)) {
+        commitSharedStructure(id, structureTarget); // Adopts the stale-completion notice and drops staged CIF bytes.
+        await viewer.restoreLastVisibleView();
+        throw new Error(seamlessState.syncNotice || 'The shared project changed while this structure was loading; the downloaded CIF was discarded.');
+      }
+      if (!assemblies) return;
       const requestedIndex = appState.biounitIndex;
       const selectedIndex = Number.isSafeInteger(requestedIndex) && requestedIndex >= 1 && requestedIndex <= assemblies.length
         ? requestedIndex
         : 1;
       const selectedAssembly = assemblies[selectedIndex - 1];
       if (!selectedAssembly) throw new Error('No biological units or polymer chains were found.');
+      if (!commitSharedStructure(id, structureTarget)) {
+        await viewer.restoreLastVisibleView();
+        throw new Error(seamlessState.syncNotice || 'The downloaded structure could not be committed to the shared project.');
+      }
+      committed = true;
+      viewer.activateStagedStructure();
+      appState.assemblies = assemblies;
       appState.biounitIndex = selectedIndex;
       appState.assemblyId = selectedAssembly.id;
       await viewer.showAssembly(selectedAssembly.id);
@@ -92,7 +112,13 @@
         shouldContinue = continueAfterLoad;
       }
     } catch (error) {
-      if (request === requestId) appState.error = error instanceof Error ? error.message : String(error);
+      if (request === requestId) {
+        if (!committed) {
+          cancelSharedCifWrite();
+          await viewer.discardStagedStructure();
+        }
+        appState.error = error instanceof Error ? error.message : String(error);
+      }
     } finally {
       if (request === requestId) appState.loading = false;
     }
@@ -168,7 +194,7 @@
   <label class="field-label" for="pdb-code">PDB code</label>
   <div class="input-with-prefix">
     <span class="input-prefix" aria-hidden="true">↗</span>
-    <input id="pdb-code" class="text-input" type="text" maxlength="4" autocomplete="off" spellcheck="false" placeholder="e.g. 2JDQ" value={appState.pdbId} oninput={handleInput} disabled={!viewer} />
+  <input id="pdb-code" class="text-input" type="text" maxlength="4" autocomplete="off" spellcheck="false" placeholder="e.g. 2JDQ" value={appState.pdbId} oninput={handleInput} disabled={!viewer || !seamlessState.ready || (!!seamlessState.pdbCode && !appState.structureReady)} />
   </div>
   <div class="field-note">Four-character code from the Protein Data Bank</div>
 
@@ -192,7 +218,7 @@
 
   <div class="stage-footer">
     <div class="footer-meta"><span class="ready-dot" class:ready={appState.structureReady}></span>{appState.structureReady ? 'Structure ready' : viewer ? 'Waiting for a PDB code' : 'Starting viewer…'}</div>
-    <button class="button button-primary" onclick={onContinue} disabled={!appState.structureReady || appState.loading}>
+    <button class="button button-primary" onclick={onContinue} disabled={!appState.structureReady || appState.loading || !seamlessState.ready}>
       Continue <span aria-hidden="true">→</span>
     </button>
   </div>

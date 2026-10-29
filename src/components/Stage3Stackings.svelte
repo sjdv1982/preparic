@@ -11,9 +11,6 @@
   <h1>Review aromatic stackings</h1>
   <p class="stage-description">Inspect the RNA–protein aromatic interactions detected for the current residue ranges.</p>
 
-  {#if seamlessState.stackingTransformError}
-    <p class="stacking-sync-error" role="alert"><strong>Stacking detection failed.</strong> {seamlessState.stackingTransformError}</p>
-  {/if}
   {#if seamlessState.stackingsError}
     <p class="stacking-sync-error" role="alert"><strong>Could not read stackings.</strong> {seamlessState.stackingsError}</p>
   {/if}
@@ -21,12 +18,16 @@
     <p class="stacking-sync-error" role="alert"><strong>Selection sync issue.</strong> {seamlessState.stackingSelectionError}</p>
   {/if}
 
-  <div class="stacking-summary" aria-live="polite">
-    <strong>{appState.stackings.length}</strong>
-    <span>{appState.stackings.length === 1 ? 'interaction detected' : 'interactions detected'}</span>
-  </div>
-
-  <StackingTable />
+  {#if !seamlessState.computedFreshness.stackings
+    && (seamlessState.status === 'live' || !seamlessState.hasStackingsSnapshot)}
+    <p class="stacking-empty" role="status">Waiting for stacking results that match the current structure and ranges…</p>
+  {:else}
+    <div class="stacking-summary" aria-live="polite">
+      <strong>{appState.stackings.length}</strong>
+      <span>{appState.stackings.length === 1 ? 'interaction detected' : 'interactions detected'}</span>
+    </div>
+    <StackingTable />
+  {/if}
 
   <div class="stage-footer stage-footer-split">
     <button class="button button-secondary" onclick={onBack}><span aria-hidden="true">←</span> Back to ranges</button>

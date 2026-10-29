@@ -4,6 +4,7 @@ import json
 from urllib.request import urlopen
 
 import pytest
+import yaml
 
 import backend
 from detect_stacking import _detect_stacking
@@ -19,6 +20,16 @@ def _redirect_mounts(monkeypatch, mount_directory):
     monkeypatch.setattr(backend, "RANGES_PATH", mount_directory / "ranges.yaml")
     monkeypatch.setattr(backend, "PDBS_PATH", mount_directory / "pdbs")
     monkeypatch.setattr(backend, "PDBS_AA_PATH", mount_directory / "pdbs-aa")
+    marker_files = {
+        "STACKING_SELECTION_PATH": "stacking-selection.json",
+        "THRESHOLD_EDITS_PATH": "best-fit-threshold-edits.json",
+        "BEST_FIT_CLIP_PATH": "best-fit-clip.json",
+        "INTERACTION_MATRIX_PATH": "interaction-matrix.json",
+        "GAUSSIAN_CLASSES_PATH": "gaussian-classes.json",
+        "ENERGY_THRESHOLD_EDITS_PATH": "energy-threshold-edits.json",
+    }
+    for name, filename in marker_files.items():
+        monkeypatch.setattr(backend, name, mount_directory / filename)
     monkeypatch.setenv("SEAMLESS_SHARE_HOST", "127.0.0.1")
     monkeypatch.setenv("SEAMLESS_SHARE_PORT", "0")
 
@@ -26,28 +37,41 @@ def _redirect_mounts(monkeypatch, mount_directory):
 @pytest.mark.parametrize(
     ("serialized", "expected"),
     [
-        ("[]", []),
-        ("[true, false]", [True, False]),
-        ("[true, 1]", []),
-        ('{"selected": true}', []),
-        ("not-json", []),
+        ('{"schema":1,"basis":{"pdbcode":"1B7F","biounit":1,"rows":[{"chain":"A","start":101,"end":104}]},"active":true,"selected":{"anchor-A":true,"anchor-B":false}}',
+         {"schema": 1, "basis": {"pdbcode": "1B7F", "biounit": 1, "rows": [{"chain": "A", "start": 101, "end": 104}]}, "active": True, "selected": {"anchor-A": True, "anchor-B": False}}),
+        ("[]", None),
+        ('{"schema":1,"basis":{"pdbcode":"1B7F","biounit":1,"rows":[{"chain":"A","start":101,"end":104}]},"active":true,"selected":{"anchor-A":1}}', None),
+        ("not-json", None),
     ],
 )
-def test_initial_stacking_selection_accepts_only_boolean_lists(
+def test_initial_stacking_selection_uses_canonical_keyed_markers(
     tmp_path, serialized, expected
 ):
     selection_path = tmp_path / "stacking-selection.json"
     selection_path.write_text(serialized, encoding="utf-8")
 
-    assert backend._initial_stacking_selection(selection_path) == expected
+    payload, diagnostics = backend.load_marker_payload(selection_path, "stacking_selection")
+    assert payload == expected
+    assert bool(diagnostics) is (expected is None)
 
 
 def test_backend_graph_mounts_and_shares_stacking_cells(
-    monkeypatch, tmp_path, cif_text, range_specs, expected_pdbs
+    monkeypatch, tmp_path, cif_text, expected_pdbs
 ):
     _redirect_mounts(monkeypatch, tmp_path)
+    range_rows = [
+        {"chain": "A", "start": 1, "end": 4},
+        {"chain": "C", "start": 2, "end": 8},
+        {"chain": "C", "start": 90, "end": 96},
+    ]
     selection_path = tmp_path / "stacking-selection.json"
-    selection_path.write_text("[true, 1]", encoding="utf-8")
+    selection = {
+        "schema": 1,
+        "basis": {"pdbcode": "1B7F", "biounit": 1, "rows": range_rows},
+        "active": True,
+        "selected": {"anchor-A": True},
+    }
+    selection_path.write_text(json.dumps(selection), encoding="utf-8")
 
     context = None
     try:
@@ -79,8 +103,8 @@ def test_backend_graph_mounts_and_shares_stacking_cells(
         assert context.stacking_selection.share.spec.readonly is False
         assert context.stackings.share.spec.readonly is True
 
-        assert context.stacking_selection.value == []
-        assert selection_path.read_bytes() == b"[]\n"
+        assert context.stacking_selection.value == selection
+        assert json.loads(selection_path.read_text(encoding="utf-8")) == selection
 
         # Empty input is a valid initialized pipeline value and mount payload.
         assert context.stackings.run() == []
@@ -91,8 +115,16 @@ def test_backend_graph_mounts_and_shares_stacking_cells(
 
         # Exercise the actual extraction -> detector dependency and compare it
         # to the same isolated transformation over its extracted PDB inputs.
+        decision = {
+            "schema": 1,
+            "basis": {"pdbcode": "1B7F", "biounit": 1},
+            "active": True,
+            "rows": range_rows,
+        }
+        context.pdbcode.set("1B7F")
+        context.biounit.set(1)
+        context.ranges.set(yaml.safe_dump(decision, sort_keys=False))
         context.cif.set(cif_text)
-        context.range_specs.set(range_specs)
         expected_stackings = _detect_stacking(expected_pdbs)
         assert context.stackings.run() == expected_stackings
         context.mounts.sync(timeout=10)

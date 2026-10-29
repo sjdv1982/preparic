@@ -1,5 +1,6 @@
 <script lang="ts">
   import { appState } from '../lib/state.svelte';
+  import { seamlessState } from '../lib/seamless.svelte';
   import { normalizeRow, validateRows } from '../lib/ranges';
   import RangeTable from './RangeTable.svelte';
 
@@ -19,6 +20,13 @@
   <div class="eyebrow">Stage 02 <span>Ranges</span></div>
   <h1>Define residue ranges</h1>
   <p class="stage-description">Add ranges by typing residue numbers or picking directly from the structure.</p>
+
+  {#if seamlessState.rangeError}
+    <p class="range-error" role="alert">{seamlessState.rangeError}</p>
+  {/if}
+  {#if seamlessState.stackingSelectionError}
+    <p class="range-error" role="alert">{seamlessState.stackingSelectionError}</p>
+  {/if}
 
   <div class="viewer-instructions"><span class="instruction-icon">⌖</span><span>Select a cell, then click a chain or residue in the viewer to fill it.</span></div>
 

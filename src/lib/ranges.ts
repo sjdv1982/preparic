@@ -12,11 +12,6 @@ export function cloneRangeRows(rows: RangeRow[]): RangeRow[] {
 }
 
 export function normalizeRow(row: RangeRow): RangeRow {
-  const start = Number(row.start);
-  const end = Number(row.end);
-  if (row.start !== '' && row.end !== '' && Number.isFinite(start) && Number.isFinite(end) && start > end) {
-    return { ...row, start: String(end), end: String(start) };
-  }
   return row;
 }
 
@@ -77,6 +72,12 @@ export function validateRows(rows: RangeRow[], chains: ChainInfo[], includeEmpty
       } else if (chain && !chain.seqIds.has(value)) {
         issues.push({ rowId: row.id, column, message: `Residue ${value} is not in chain ${chain.name}.` });
       }
+    }
+    const start = Number(row.start.trim());
+    const end = Number(row.end.trim());
+    if (row.start.trim() !== '' && row.end.trim() !== ''
+      && Number.isInteger(start) && Number.isInteger(end) && start > end) {
+      issues.push({ rowId: row.id, column: 'end', message: 'End residue must not come before the start residue.' });
     }
   }
   return issues;

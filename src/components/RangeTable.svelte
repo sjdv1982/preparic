@@ -1,12 +1,17 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import { appState } from '../lib/state.svelte';
+  import { setSharedRangeRows } from '../lib/seamless.svelte';
   import { addRow, isCellInvalid, moveCell, moveRow, removeRow, setActiveCell, updateRow, validateRows } from '../lib/ranges';
   import type { ActiveCell, RangeColumn } from '../lib/types';
   import type { ValidationIssue } from '../lib/ranges';
 
   let { issues }: { issues: ValidationIssue[] } = $props();
   let editing: ActiveCell | null = $state(null);
+
+  function commitRows() {
+    if (appState.stage === 2) setSharedRangeRows(appState.rows);
+  }
 
   function activate(next: ActiveCell | null) {
     appState.rows = setActiveCell(appState.rows, appState.activeCell, next);
@@ -44,6 +49,7 @@
 
   function clearCell(rowId: string, column: RangeColumn) {
     updateValue(rowId, column, '');
+    commitRows();
     editing = null;
   }
 
@@ -56,6 +62,7 @@
     if (event.key === 'Enter') {
       event.preventDefault();
       editing = null;
+      commitRows();
       return;
     }
     if (event.key === 'Tab' || event.key.startsWith('Arrow')) {
@@ -92,10 +99,12 @@
 
   function toggleAlwaysVisible(rowId: string, checked: boolean) {
     appState.rows = updateRow(appState.rows, rowId, { alwaysVisible: checked });
+    commitRows();
   }
 
   function clearRange(rowId: string) {
     appState.rows = updateRow(appState.rows, rowId, { start: '', end: '', alwaysVisible: false });
+    commitRows();
     editing = null;
   }
 
@@ -106,6 +115,7 @@
 
   function deleteRow(rowId: string) {
     appState.rows = removeRow(appState.rows, rowId);
+    commitRows();
     if (appState.activeCell?.rowId === rowId) activate(null);
   }
 
@@ -147,12 +157,12 @@
             {@const invalid = isCellInvalid(issues, row.id, column)}
             <td class:active-cell={active} class:invalid-cell={invalid} title={rowIssues.find(issue => issue.rowId === row.id && issue.column === column)?.message ?? ''}>
               {#if editingThis && column === 'chain'}
-                <select class="cell-editor" data-editor-key={`${row.id}:${column}`} aria-label={`Chain for row ${rowIndex + 1}`} value={row.chain} onchange={(event) => { updateValue(row.id, column, event.currentTarget.value); editing = null; }} onkeydown={(event) => handleEditorKeydown(event, cell)} onblur={() => { editing = null; }}>
+                <select class="cell-editor" data-editor-key={`${row.id}:${column}`} aria-label={`Chain for row ${rowIndex + 1}`} value={row.chain} onchange={(event) => { updateValue(row.id, column, event.currentTarget.value); editing = null; commitRows(); }} onkeydown={(event) => handleEditorKeydown(event, cell)} onblur={() => { editing = null; commitRows(); }}>
                   <option value="">Choose…</option>
                   {#each chainNames as name (name)}<option value={name}>{name}</option>{/each}
                 </select>
               {:else if editingThis}
-                <input class="cell-editor" data-editor-key={`${row.id}:${column}`} aria-label={`${column === 'start' ? 'Start' : 'End'} residue for row ${rowIndex + 1}`} inputmode="numeric" value={row[column]} oninput={(event) => updateValue(row.id, column, event.currentTarget.value)} onkeydown={(event) => handleEditorKeydown(event, cell)} onblur={() => { editing = null; }} />
+                <input class="cell-editor" data-editor-key={`${row.id}:${column}`} aria-label={`${column === 'start' ? 'Start' : 'End'} residue for row ${rowIndex + 1}`} inputmode="numeric" value={row[column]} oninput={(event) => updateValue(row.id, column, event.currentTarget.value)} onkeydown={(event) => handleEditorKeydown(event, cell)} onblur={() => { editing = null; commitRows(); }} />
               {:else}
                 <button type="button" class="cell-display" class:cell-active={active} data-cell-key={`${row.id}:${column}`} tabindex={active || !appState.activeCell ? 0 : -1} aria-label={`${column} ${row[column] || 'empty'}, row ${rowIndex + 1}`} onclick={() => activate(cell)} ondblclick={() => void beginEdit(cell)} onkeydown={(event) => handleCellKeydown(event, cell)}>
                   {#if row[column]}
@@ -165,8 +175,8 @@
             </td>
           {/each}
           <td class="row-controls">
-            <button type="button" class="icon-button" aria-label={`Move row ${rowIndex + 1} up`} title="Move up" disabled={rowIndex === 0} onclick={() => appState.rows = moveRow(appState.rows, row.id, -1)}>↑</button>
-            <button type="button" class="icon-button" aria-label={`Move row ${rowIndex + 1} down`} title="Move down" disabled={rowIndex === appState.rows.length - 1} onclick={() => appState.rows = moveRow(appState.rows, row.id, 1)}>↓</button>
+            <button type="button" class="icon-button" aria-label={`Move row ${rowIndex + 1} up`} title="Move up" disabled={rowIndex === 0} onclick={() => { appState.rows = moveRow(appState.rows, row.id, -1); commitRows(); }}>↑</button>
+            <button type="button" class="icon-button" aria-label={`Move row ${rowIndex + 1} down`} title="Move down" disabled={rowIndex === appState.rows.length - 1} onclick={() => { appState.rows = moveRow(appState.rows, row.id, 1); commitRows(); }}>↓</button>
             <button type="button" class="icon-button clear-range-button" aria-label={`Clear range for row ${rowIndex + 1}`} title="Clear range" onclick={() => clearRange(row.id)}>↺</button>
             <button type="button" class="icon-button remove-button" aria-label={`Remove row ${rowIndex + 1}`} title="Remove row" onclick={() => deleteRow(row.id)}>×</button>
           </td>

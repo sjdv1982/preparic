@@ -10,6 +10,22 @@ import {
 } from '../../src/lib/seamless.svelte';
 import { appState, invalidateStackingState } from '../../src/lib/state.svelte';
 import type { Stacking } from '../../src/lib/types';
+import { stackingKey } from '../../src/lib/stackings';
+
+const rangeRows = [{ chain: 'A', start: 101, end: 104 }];
+
+function selectionDocument(selected: Record<string, boolean>, active = true): string {
+  return JSON.stringify({
+    schema: 1,
+    basis: { pdbcode: '1B7F', biounit: 1, rows: rangeRows },
+    active,
+    selected,
+  });
+}
+
+function rangeDocument(): string {
+  return JSON.stringify({ schema: 1, basis: { pdbcode: '1B7F', biounit: 1 }, active: true, rows: rangeRows });
+}
 
 class FakeCell implements SharedCell {
   value: SharedValue;
@@ -54,7 +70,7 @@ function createFakeConnector(): FakeConnector {
     },
     pdbcode: new FakeCell('1B7F'),
     biounit: new FakeCell('1'),
-    ranges: new FakeCell(''),
+    ranges: new FakeCell(),
     stackings,
     stacking_selection: selection,
   };
@@ -64,6 +80,9 @@ function createFakeConnector(): FakeConnector {
   };
   connectToSeamless(fakeConnector);
   context.self.onsharelist(['pdbcode', 'biounit', 'ranges', 'stackings', 'stacking_selection']);
+  context.pdbcode!.onchange('1B7F');
+  context.biounit!.onchange('1');
+  context.ranges!.onchange(rangeDocument());
   return { context, stackings, selection };
 }
 
@@ -104,11 +123,12 @@ describe('Seamless stacking share synchronization', () => {
 
   it('attaches the read-only table and writable selection shares with separate revisions', () => {
     const connector = createFakeConnector();
+    const anchor = stackingKey(stacking());
     expect(connector.stackings.readonly).toBe(true);
     expect(connector.selection.readonly).toBe(false);
 
     emitTable(connector, [stacking()], 11);
-    connector.selection.emit('[false]', 5);
+    connector.selection.emit(selectionDocument({ [anchor]: false }), 5);
 
     expect(seamlessState.stackingRevision).toBe(11);
     expect(seamlessState.stackingSelectionRevision).toBe(5);
@@ -117,92 +137,124 @@ describe('Seamless stacking share synchronization', () => {
 
   it('auto-selects new rows locally but never writes stacking_selection on a table update', () => {
     const connector = createFakeConnector();
-    emitTable(connector, [stacking(), stacking({ rna_resid: 8, distance: 5.2 })], 1);
+    const first = stacking();
+    const second = stacking({ rna_resid: 8, distance: 5.2 });
+    const firstKey = stackingKey(first);
+    emitTable(connector, [first, second], 1);
     expect(appState.stackingSelection).toEqual([true, false]);
     expect(connector.selection.writes).toEqual([]);
     expect(seamlessState.stackingSelectionPendingWrite).toBe(false);
-    connector.selection.emit('[]', 1);           // Back 3→2 state
-    emitTable(connector, [stacking(), stacking({ rna_resid: 9 })], 2);
+    connector.selection.emit(selectionDocument({ [firstKey]: false }, false), 1); // Back 3→2 state
+    emitTable(connector, [first, stacking({ rna_resid: 9 })], 2);
     expect(connector.selection.writes).toEqual([]);
   });
 
-  it('applies an exact-length remote boolean list without writing it back', () => {
+  it('applies keyed remote decisions without writing them back', () => {
     const connector = createFakeConnector();
-    emitTable(connector, [stacking(), stacking({ rna_resid: 8 })], 1);
+    const first = stacking();
+    const second = stacking({ rna_resid: 8 });
+    const firstKey = stackingKey(first);
+    const secondKey = stackingKey(second);
+    emitTable(connector, [first, second], 1);
     const writesBeforeRemoteUpdate = [...connector.selection.writes];
 
-    connector.selection.emit('[false,true]', 2);
+    connector.selection.emit(selectionDocument({ [firstKey]: false, [secondKey]: true }), 2);
 
     expect(appState.stackingSelection).toEqual([false, true]);
     expect(connector.selection.writes).toEqual(writesBeforeRemoteUpdate);
     expect(seamlessState.stackingSelectionError).toBe('');
   });
 
-  it('queues a length mismatch through an empty table and applies it to the next non-empty table', () => {
+  it('queues a keyed decision through an empty table and applies it when its anchors return', () => {
     const connector = createFakeConnector();
-    emitTable(connector, [stacking()], 1);
+    const first = stacking();
+    const second = stacking({ rna_resid: 8 });
+    const firstKey = stackingKey(first);
+    const secondKey = stackingKey(second);
+    emitTable(connector, [first], 1);
     const writesBeforeQueue = [...connector.selection.writes];
 
-    connector.selection.emit('[false,true]', 2);
-    expect(appState.stackingSelection).toEqual([true]);
+    connector.selection.emit(selectionDocument({ [firstKey]: false, [secondKey]: true }), 2);
+    expect(appState.stackingSelection).toEqual([false]);
     expect(seamlessState.stackingSelectionError).toBe('');
 
     emitTable(connector, [], 2);
     expect(appState.stackings).toEqual([]);
     expect(connector.selection.writes).toEqual(writesBeforeQueue);
 
-    emitTable(connector, [stacking(), stacking({ rna_resid: 8 })], 3);
+    emitTable(connector, [first, second], 3);
     expect(appState.stackingSelection).toEqual([false, true]);
     expect(connector.selection.writes).toEqual(writesBeforeQueue);
   });
 
-  it('rejects invalid selection types without replacing the current selection', () => {
+  it('rejects a keyed decision with nonboolean values without replacing the current selection', () => {
     const connector = createFakeConnector();
-    emitTable(connector, [stacking()], 1);
+    const row = stacking();
+    const key = stackingKey(row);
+    emitTable(connector, [row], 1);
     const currentSelection = [...appState.stackingSelection];
 
-    connector.selection.emit('[true,"false"]', 2);
+    connector.selection.emit(selectionDocument({ [key]: 'false' as unknown as boolean }), 2);
 
     expect(appState.stackingSelection).toEqual(currentSelection);
     expect(seamlessState.stackingSelectionReady).toBe(false);
-    expect(seamlessState.stackingSelectionError).toMatch(/only booleans/);
+    expect(seamlessState.stackingSelectionError).toMatch(/invalid/);
   });
 
   it('pushes checkbox changes and suppresses the matching backend echo', () => {
     const connector = createFakeConnector();
-    connector.selection.emit('[true]', 1);
-    emitTable(connector, [stacking()], 1);
+    const row = stacking();
+    const key = stackingKey(row);
+    connector.selection.emit(selectionDocument({ [key]: true }), 1);
+    emitTable(connector, [row], 1);
     expect(appState.stackingSelection).toEqual([true]);
     expect(connector.selection.writes).toEqual([]);
     appState.stackingSelection = [false];
 
     expect(setSharedStackingSelection(appState.stackingSelection)).toBe(true);
-    expect(connector.selection.writes).toEqual(['[false]']);
+    expect(JSON.parse(connector.selection.writes[0])).toMatchObject({
+      schema: 1,
+      basis: { pdbcode: '1B7F', biounit: 1, rows: rangeRows },
+      active: true,
+      selected: { [key]: false },
+    });
     expect(seamlessState.stackingSelectionPendingWrite).toBe(true);
 
-    connector.selection.emit('[false]', 2);
+    connector.selection.emit(selectionDocument({ [key]: false }), 2);
 
-    expect(connector.selection.writes).toEqual(['[false]']);
+    expect(JSON.parse(connector.selection.writes[0])).toMatchObject({
+      schema: 1,
+      basis: { pdbcode: '1B7F', biounit: 1, rows: rangeRows },
+      active: true,
+      selected: { [key]: false },
+    });
     expect(seamlessState.stackingSelectionPendingWrite).toBe(false);
     expect(appState.stackingSelection).toEqual([false]);
   });
 
   it('ignores an older backend read that races with an optimistic selection write', () => {
     const connector = createFakeConnector();
-    connector.selection.emit('[]', 0);
-    emitTable(connector, [stacking()], 1);
+    const row = stacking();
+    const key = stackingKey(row);
+    connector.selection.emit(selectionDocument({}, false), 0);
+    emitTable(connector, [row], 1);
     expect(connector.selection.writes).toEqual([]);
     appState.stackingSelection = [true];
     expect(setSharedStackingSelection([true])).toBe(true);   // Continue 2→3 default
     expect(seamlessState.stackingSelectionPendingWrite).toBe(true);
 
-    connector.selection.emit('[]', 0);                 // older read races the write
+    connector.selection.emit(selectionDocument({}, false), 0); // older read races the write
     expect(appState.stackingSelection).toEqual([true]);
     expect(seamlessState.stackingSelectionPendingWrite).toBe(true);
 
-    connector.selection.emit('[true]', 1);             // echo
+    connector.selection.emit(selectionDocument({ [key]: true }), 1); // echo
     expect(seamlessState.stackingSelectionPendingWrite).toBe(false);
-    expect(connector.selection.writes).toEqual(['[true]']);
+    expect(JSON.parse(connector.selection.writes[0])).toMatchObject({
+      schema: 1,
+      basis: { pdbcode: '1B7F', biounit: 1, rows: rangeRows },
+      active: true,
+      selected: { [key]: true },
+    });
   });
 
   it('surfaces rejected writes without discarding the optimistic checkbox state', () => {
@@ -234,7 +286,9 @@ describe('Seamless stacking share synchronization', () => {
 
   it('reports malformed table JSON and detector failures separately', () => {
     const connector = createFakeConnector();
-    emitTable(connector, [stacking()], 1);
+    const row = stacking();
+    emitTable(connector, [row], 1);
+    connector.selection.emit(selectionDocument({ [stackingKey(row)]: true }), 1);
     const validRows = [...appState.stackings];
 
     connector.stackings.emit('{not json', 2);

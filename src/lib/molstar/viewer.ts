@@ -22,6 +22,14 @@ import { uniqueStackingParticipantRanges } from '../stackings';
 import type { AssemblyInfo, ChainInfo, PickInfo, RenderSpec, StackingViewerInput } from '../types';
 
 const RENDER_TAG = 'preparic-phase1-render';
+interface StructureSource {
+  cif: string;
+  id: string;
+  dataRef: any;
+  trajectoryRef: any;
+  modelRef: any;
+  model: any;
+}
 const StackingConnectorShape = StateTransformer.builderFactory('preparic')({
   name: 'stacking-centroid-connectors',
   display: 'Stacking Centroid Connectors',
@@ -64,6 +72,12 @@ export class MolViewer {
   private modelRef: any = null;
   private model: any = null;
   private structureRef: any = null;
+  private loadedCif: string | null = null;
+  private loadedId: string | null = null;
+  private lastVisibleView: { cif: string; id: string; assemblyId: string } | null = null;
+  private activeSource: StructureSource | null = null;
+  private stagedSource: StructureSource | null = null;
+  private retiredSource: StructureSource | null = null;
   private loadToken = 0;
   private showToken = 0;
   private renderToken = 0;
@@ -141,9 +155,17 @@ export class MolViewer {
     this.plugin.managers.interactivity.setProps({ granularity });
   }
 
-  loadPdb(id: string): Promise<AssemblyInfo[] | null> {
+  loadPdb(id: string, isCurrent: () => boolean = () => true): Promise<AssemblyInfo[] | null> {
     const token = ++this.loadToken;
-    const operation = this.loadQueue.then(() => this.loadPdbNow(id, token));
+    const operation = this.loadQueue.then(() => this.loadPdbNow(id, token, isCurrent));
+    this.loadQueue = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  loadCif(cif: string, id: string, isCurrent: () => boolean = () => true): Promise<AssemblyInfo[] | null> {
+    const token = ++this.loadToken;
+    this.downloadedCif = null;
+    const operation = this.loadQueue.then(() => this.loadCifNow(cif, id, token, undefined, isCurrent));
     this.loadQueue = operation.then(() => undefined, () => undefined);
     return operation;
   }
@@ -162,52 +184,160 @@ export class MolViewer {
       this.modelRef = null;
       this.model = null;
       this.structureRef = null;
+      this.loadedCif = null;
+      this.loadedId = null;
+      this.lastVisibleView = null;
+      this.activeSource = null;
+      this.stagedSource = null;
+      this.retiredSource = null;
     });
     this.loadQueue = operation.then(() => undefined, () => undefined);
     return operation;
   }
 
-  private async loadPdbNow(id: string, token: number): Promise<AssemblyInfo[] | null> {
-    if (token !== this.loadToken) return null;
+  private async loadPdbNow(id: string, token: number, isCurrent: () => boolean): Promise<AssemblyInfo[] | null> {
+    if (token !== this.loadToken || !isCurrent()) return null;
     this.downloadedCif = null;
     await this.showQueue;
     await this.renderQueue;
-    if (token !== this.loadToken) return null;
-    await this.plugin.clear();
-    this.modelRef = null;
-    this.model = null;
-    this.structureRef = null;
+    if (token !== this.loadToken || !isCurrent()) return null;
     try {
       const data = await this.plugin.builders.data.download({
         url: `https://files.rcsb.org/download/${encodeURIComponent(id.toUpperCase())}.cif`,
         isBinary: false,
         label: id.toUpperCase(),
       });
-      if (token !== this.loadToken) return null;
+      if (token !== this.loadToken || !isCurrent()) {
+        await this.deleteStateRefs([data]);
+        return null;
+      }
       const cif = data.obj?.data;
       if (typeof cif !== 'string') throw new Error('The PDB entry did not return a text CIF file.');
-      const trajectory = await this.plugin.builders.structure.parseTrajectory(data, 'mmcif');
-      if (token !== this.loadToken) return null;
-      const modelRef = await this.plugin.builders.structure.createModel(trajectory, { modelIndex: 0 });
-      if (token !== this.loadToken) return null;
-      const model = modelRef.obj?.data;
-      if (!model) throw new Error('The PDB entry did not contain a usable model.');
-      this.modelRef = modelRef;
-      this.model = model;
-      const assemblies = this.getAssemblies(this.model);
-      this.downloadedCif = cif;
-      try {
-        this.onCifDownloaded(cif);
-      } catch {
-        // Saving the downloaded CIF must never fail or delay rendering it.
+      // Keep the last visible structure in place while the network request is
+      // pending. Recheck the shared target before replacing it with this CIF.
+      if (!cif.trim() || token !== this.loadToken || !isCurrent()) {
+        await this.deleteStateRefs([data]);
+        return null;
       }
-      return assemblies;
+      this.downloadedCif = cif;
+      try { this.onCifDownloaded(cif); } catch { /* Saving CIF bytes does not block loading. */ }
+      return await this.loadCifNow(cif, id, token, data, isCurrent);
     } catch (error) {
-      if (token !== this.loadToken) return null;
-      this.modelRef = null;
-      this.model = null;
+      if (token !== this.loadToken || !isCurrent()) return null;
       throw new Error(readableLoadError(error));
     }
+  }
+
+  private async loadCifNow(cif: string, id: string, token: number, downloadedData?: unknown, isCurrent: () => boolean = () => true): Promise<AssemblyInfo[] | null> {
+    if (token !== this.loadToken || !isCurrent()) return null;
+    if (!cif.trim()) throw new Error('The stored CIF is empty.');
+    await this.showQueue;
+    await this.renderQueue;
+    if (token !== this.loadToken || !isCurrent()) return null;
+    await this.discardStagedStructure();
+    const staged: StructureSource = {
+      cif,
+      id: id.toUpperCase(),
+      dataRef: null,
+      trajectoryRef: null,
+      modelRef: null,
+      model: null,
+    };
+    this.stagedSource = staged;
+    try {
+      const data = downloadedData ?? await this.plugin.builders.data.rawData({ data: cif, label: id.toUpperCase() });
+      staged.dataRef = data;
+      if (token !== this.loadToken || !isCurrent()) {
+        await this.discardStagedStructure(staged);
+        return null;
+      }
+      const trajectory = await this.plugin.builders.structure.parseTrajectory(data as never, 'mmcif');
+      staged.trajectoryRef = trajectory;
+      if (token !== this.loadToken || !isCurrent()) {
+        await this.discardStagedStructure(staged);
+        return null;
+      }
+      const modelRef = await this.plugin.builders.structure.createModel(trajectory, { modelIndex: 0 });
+      staged.modelRef = modelRef;
+      if (token !== this.loadToken || !isCurrent()) {
+        await this.discardStagedStructure(staged);
+        return null;
+      }
+      const model = modelRef.obj?.data;
+      if (!model) throw new Error('The shared CIF did not contain a usable model.');
+      staged.model = model;
+      const assemblies = this.getAssemblies(model);
+      this.downloadedCif = cif;
+      return assemblies;
+    } catch (error) {
+      await this.discardStagedStructure(staged);
+      if (token !== this.loadToken || !isCurrent()) return null;
+      throw new Error(readableLoadError(error));
+    }
+  }
+
+  activateStagedStructure(): void {
+    const staged = this.stagedSource;
+    if (!staged?.modelRef || !staged.model) throw new Error('No authorized structure load is ready to display.');
+    if (this.retiredSource) void this.deleteStructureSource(this.retiredSource);
+    this.retiredSource = this.activeSource;
+    this.activeSource = staged;
+    this.stagedSource = null;
+    this.modelRef = staged.modelRef;
+    this.model = staged.model;
+    this.loadedCif = staged.cif;
+    this.loadedId = staged.id;
+  }
+
+  async discardStagedStructure(expected: StructureSource | null = this.stagedSource): Promise<void> {
+    if (!expected) return;
+    if (this.stagedSource === expected) this.stagedSource = null;
+    await this.deleteStructureSource(expected);
+  }
+
+  private async deleteStructureSource(source: StructureSource | null): Promise<void> {
+    if (!source) return;
+    await this.deleteStateRefs([source.modelRef, source.trajectoryRef, source.dataRef]);
+  }
+
+  private async deleteStateRefs(refs: unknown[]): Promise<void> {
+    const uniqueRefs = [...new Set(refs.filter(ref => ref != null))];
+    if (uniqueRefs.length === 0) return;
+    try {
+      const update = this.plugin.state.data.build();
+      for (const ref of uniqueRefs) update.delete(ref as never);
+      await update.commit();
+    } catch {
+      // Cleanup failures do not replace the structure or connectivity error.
+    }
+  }
+
+  async restoreLastVisibleView(): Promise<void> {
+    const snapshot = this.lastVisibleView;
+    await this.discardStagedStructure();
+    if (!snapshot) return;
+    if (this.retiredSource) {
+      const failedSource = this.activeSource;
+      if (this.structureRef) {
+        await this.deleteStateRefs([this.structureRef]);
+        this.structureRef = null;
+      }
+      this.activeSource = this.retiredSource;
+      this.retiredSource = null;
+      this.modelRef = this.activeSource.modelRef;
+      this.model = this.activeSource.model;
+      this.loadedCif = this.activeSource.cif;
+      this.loadedId = this.activeSource.id;
+      await this.deleteStructureSource(failedSource);
+    }
+    if (this.structureRef && this.activeSource?.cif === snapshot.cif
+      && this.activeSource.id === snapshot.id) return;
+    if (!this.activeSource || this.activeSource.cif !== snapshot.cif || this.activeSource.id !== snapshot.id) {
+      const assemblies = await this.loadCif(snapshot.cif, snapshot.id);
+      if (!assemblies?.some(assembly => assembly.id === snapshot.assemblyId)) return;
+      this.activateStagedStructure();
+    }
+    await this.showAssembly(snapshot.assemblyId);
   }
 
   showAssembly(id: string): Promise<void> {
@@ -238,7 +368,15 @@ export class MolViewer {
     }
     this.structureRef = structure;
     await this.render({ focus: null });
-    if (token === this.showToken) this.plugin.managers.camera.reset();
+    if (token === this.showToken) {
+      this.plugin.managers.camera.reset();
+      if (this.loadedCif && this.loadedId) {
+        this.lastVisibleView = { cif: this.loadedCif, id: this.loadedId, assemblyId: id };
+      }
+      const retired = this.retiredSource;
+      this.retiredSource = null;
+      await this.deleteStructureSource(retired);
+    }
   }
 
   listChains(): ChainInfo[] {
