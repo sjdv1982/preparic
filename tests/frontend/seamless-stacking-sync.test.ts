@@ -75,7 +75,7 @@ function stacking(values: Partial<Stacking> = {}): Stacking {
     protein_resid: 93,
     distance: 4.2,
     tilt_angle: 22,
-    slip_angle: 71,
+    slip_angle: 19,
     rna_centroid: [1, 2, 3],
     protein_centroid: [4, 5, 6],
     ...values,
@@ -96,6 +96,7 @@ describe('Seamless stacking share synchronization', () => {
     seamlessState.stackingsReady = false;
     seamlessState.stackingsError = '';
     seamlessState.stackingSelectionReady = false;
+    seamlessState.stackingSelectionNonEmpty = false;
     seamlessState.stackingSelectionError = '';
     seamlessState.stackingSelectionPendingWrite = false;
     seamlessState.stackingTransformError = '';
@@ -114,15 +115,15 @@ describe('Seamless stacking share synchronization', () => {
     expect(appState.stackingSelection).toEqual([false]);
   });
 
-  it('auto-selects new rows and pushes the complete list to the backend', () => {
+  it('auto-selects new rows locally but never writes stacking_selection on a table update', () => {
     const connector = createFakeConnector();
-    const selectedByDefault = stacking();
-    const notSelected = stacking({ rna_resid: 8, distance: 5.2 });
-
-    emitTable(connector, [selectedByDefault, notSelected], 1);
-
+    emitTable(connector, [stacking(), stacking({ rna_resid: 8, distance: 5.2 })], 1);
     expect(appState.stackingSelection).toEqual([true, false]);
-    expect(connector.selection.writes).toEqual(['[true,false]']);
+    expect(connector.selection.writes).toEqual([]);
+    expect(seamlessState.stackingSelectionPendingWrite).toBe(false);
+    connector.selection.emit('[]', 1);           // Back 3→2 state
+    emitTable(connector, [stacking(), stacking({ rna_resid: 9 })], 2);
+    expect(connector.selection.writes).toEqual([]);
   });
 
   it('applies an exact-length remote boolean list without writing it back', () => {
@@ -169,30 +170,37 @@ describe('Seamless stacking share synchronization', () => {
 
   it('pushes checkbox changes and suppresses the matching backend echo', () => {
     const connector = createFakeConnector();
+    connector.selection.emit('[true]', 1);
     emitTable(connector, [stacking()], 1);
+    expect(appState.stackingSelection).toEqual([true]);
+    expect(connector.selection.writes).toEqual([]);
     appState.stackingSelection = [false];
 
     expect(setSharedStackingSelection(appState.stackingSelection)).toBe(true);
-    expect(connector.selection.writes).toEqual(['[true]', '[false]']);
+    expect(connector.selection.writes).toEqual(['[false]']);
     expect(seamlessState.stackingSelectionPendingWrite).toBe(true);
 
     connector.selection.emit('[false]', 2);
 
-    expect(connector.selection.writes).toEqual(['[true]', '[false]']);
+    expect(connector.selection.writes).toEqual(['[false]']);
     expect(seamlessState.stackingSelectionPendingWrite).toBe(false);
     expect(appState.stackingSelection).toEqual([false]);
   });
 
   it('ignores an older backend read that races with an optimistic selection write', () => {
     const connector = createFakeConnector();
+    connector.selection.emit('[]', 0);
     emitTable(connector, [stacking()], 1);
+    expect(connector.selection.writes).toEqual([]);
+    appState.stackingSelection = [true];
+    expect(setSharedStackingSelection([true])).toBe(true);   // Continue 2→3 default
     expect(seamlessState.stackingSelectionPendingWrite).toBe(true);
 
-    connector.selection.emit('[]', 0);
+    connector.selection.emit('[]', 0);                 // older read races the write
     expect(appState.stackingSelection).toEqual([true]);
     expect(seamlessState.stackingSelectionPendingWrite).toBe(true);
 
-    connector.selection.emit('[true]', 1);
+    connector.selection.emit('[true]', 1);             // echo
     expect(seamlessState.stackingSelectionPendingWrite).toBe(false);
     expect(connector.selection.writes).toEqual(['[true]']);
   });

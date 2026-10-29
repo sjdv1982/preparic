@@ -139,7 +139,7 @@ export function mergeStackings(
   const stackings = nextStackings.map(copyStacking);
   const stackingSelection = stackings.map(stacking => {
     const previous = previousByKey.get(stackingKey(stacking));
-    return previous ?? (stacking.distance <= 5.0 && stacking.tilt_angle <= 30.0);
+    return previous ?? (stacking.distance <= 5.0 && stacking.slip_angle < 60.0);
   });
   return { stackings, stackingSelection };
 }

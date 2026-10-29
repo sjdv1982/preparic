@@ -42,13 +42,15 @@ def _pdb(*residues):
     return "".join(lines)
 
 
-def _pair_pdbs(distance=5.0, protein_resid=93, rna_resid=4, tilt=0.0, slip=90.0,
+def _pair_pdbs(distance=5.0, protein_resid=93, rna_resid=4, tilt=0.0, slip=0.0,
                rna_resname="A", protein_resname="PHE"):
+    # slip is the angle between the centroid displacement and the protein ring
+    # normal (z): 0 deg = zenith, 90 deg = in the ring plane.
     slip_radians = math.radians(slip)
     rna_center = (
-        distance * math.cos(slip_radians),
-        0.0,
         distance * math.sin(slip_radians),
+        0.0,
+        distance * math.cos(slip_radians),
     )
     return [
         _pdb((rna_resname, rna_resid, _ring_coordinates(_RNA_ATOMS, rna_center, tilt), "A")),
@@ -65,7 +67,7 @@ def _plain_types(value):
 
 
 def test_positive_pair_reports_independently_known_geometry():
-    range_pdbs = _pair_pdbs(distance=4.8, tilt=20.0, slip=60.0)
+    range_pdbs = _pair_pdbs(distance=4.8, tilt=20.0, slip=30.0)
 
     result = _detect_stacking(range_pdbs)
 
@@ -77,10 +79,18 @@ def test_positive_pair_reports_independently_known_geometry():
     assert row["protein_resid"] == 93
     assert row["distance"] == pytest.approx(4.8, abs=0.002)
     assert row["tilt_angle"] == pytest.approx(20.0, abs=0.1)
-    assert row["slip_angle"] == pytest.approx(60.0, abs=0.1)
-    assert row["rna_centroid"] == pytest.approx([2.4, 0.0, 4.8 * math.sin(math.radians(60))], abs=0.002)
+    assert row["slip_angle"] == pytest.approx(30.0, abs=0.1)
+    assert row["rna_centroid"] == pytest.approx([2.4, 0.0, 4.8 * math.cos(math.radians(30))], abs=0.002)
     assert row["protein_centroid"] == pytest.approx([0.0, 0.0, 0.0], abs=0.002)
     assert _plain_types(result)
+
+
+def test_slip_angle_is_measured_from_the_protein_ring_normal():
+    zenith = _detect_stacking(_pair_pdbs(distance=4.0, slip=0.0))
+    horizon = _detect_stacking(_pair_pdbs(distance=4.0, slip=90.0))
+
+    assert zenith[0]["slip_angle"] == pytest.approx(0.0, abs=0.1)
+    assert horizon[0]["slip_angle"] == pytest.approx(90.0, abs=0.1)
 
 
 def test_distance_cutoff_is_inclusive_and_just_outside_is_excluded():
@@ -213,7 +223,7 @@ def test_repository_1b7f_fixture_detects_rna_range_against_protein_ranges(expect
     ] == [("G", 4, 3, 93)]
     assert result[0]["distance"] == pytest.approx(3.699, abs=0.001)
     assert result[0]["tilt_angle"] == pytest.approx(15.719, abs=0.001)
-    assert result[0]["slip_angle"] == pytest.approx(68.051, abs=0.001)
+    assert result[0]["slip_angle"] == pytest.approx(21.949, abs=0.001)
     assert result == sorted(
         result,
         key=lambda row: (row["protein_range_pdb_id"], row["protein_resid"], row["rna_resid"]),

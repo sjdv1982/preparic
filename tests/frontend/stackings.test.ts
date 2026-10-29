@@ -20,7 +20,7 @@ function stacking(values: Partial<Stacking> = {}): Stacking {
     protein_resid: 93,
     distance: 4.2,
     tilt_angle: 22,
-    slip_angle: 71,
+    slip_angle: 19,
     rna_centroid: [1, 2, 3],
     protein_centroid: [4, 5, 6],
     ...values,
@@ -65,7 +65,7 @@ describe('stacking boundary normalization', () => {
 describe('stacking identity and selection merge', () => {
   it('uses participant identity and ignores measurement changes', () => {
     const original = stacking();
-    const measuredAgain = stacking({ distance: 5.5, tilt_angle: 40, slip_angle: 20 });
+    const measuredAgain = stacking({ distance: 5.5, tilt_angle: 40, slip_angle: 71 });
     expect(stackingKey(original)).toBe(stackingKey(measuredAgain));
     expect(stackingKey(original)).not.toBe(stackingKey(stacking({ protein_resid: 94 })));
   });
@@ -86,15 +86,16 @@ describe('stacking identity and selection merge', () => {
     expect(next.stackings[0].distance).toBe(4);
   });
 
-  it('auto-selects only genuinely new rows at the inclusive 5 Å / 30° limits', () => {
+  it('auto-selects only genuinely new rows at distance <= 5 Å and slip < 60° (strict)', () => {
     const previous = stacking({ rna_resid: 1 });
     const result = mergeStackings([previous], [false], [
       previous,
-      stacking({ rna_resid: 2, distance: 5, tilt_angle: 30 }),
-      stacking({ rna_resid: 3, distance: 5.01, tilt_angle: 10 }),
-      stacking({ rna_resid: 4, distance: 4, tilt_angle: 30.01 }),
+      stacking({ rna_resid: 2, distance: 5, slip_angle: 59.99 }),
+      stacking({ rna_resid: 3, distance: 5, slip_angle: 60 }),
+      stacking({ rna_resid: 4, distance: 5.01, slip_angle: 10 }),
+      stacking({ rna_resid: 5, distance: 4, tilt_angle: 45, slip_angle: 10 }),
     ]);
-    expect(result.stackingSelection).toEqual([false, true, false, false]);
+    expect(result.stackingSelection).toEqual([false, true, false, false, true]);
   });
 
   it('does not preserve misaligned selection arrays', () => {

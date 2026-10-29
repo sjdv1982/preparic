@@ -96,9 +96,11 @@ def _detect_stacking(range_pdbs: list[str]) -> list[dict]:
     def slip_angle_degrees(
         displacement: np.ndarray, protein_normal: np.ndarray
     ) -> float:
+        # Displacement angle phi: angle between the centroid displacement and
+        # the protein ring normal (0 deg = zenith, 90 deg = in the ring plane).
         normal_component = abs(float(np.dot(displacement, protein_normal)))
         distance = float(np.linalg.norm(displacement))
-        return math.degrees(math.asin(clamp_unit(normal_component / distance)))
+        return math.degrees(math.acos(clamp_unit(normal_component / distance)))
 
     if not isinstance(range_pdbs, list):
         raise ValueError("range_pdbs must be provided as a list of PDB strings")

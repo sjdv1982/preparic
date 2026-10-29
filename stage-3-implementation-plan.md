@@ -13,8 +13,9 @@ The implementation must preserve these contracts:
 - Only residues with every atom in the configured ring atom set participate.
 - A candidate is emitted when centroid distance is `<= 6.0 Å` and the acute
   plane/plane tilt is `<= 45.0°`. Cutoffs are inclusive.
-- Slip is the acute angle between the centroid displacement vector and the
-  **protein ring plane** (`0°` in-plane, `90°` normal to the plane).
+- Slip (the displacement angle φ) is the acute angle between the centroid
+  displacement vector and the **protein ring normal** (`0°` = zenith, along the
+  normal; `90°` = horizon, in the ring plane).
 - Results are deterministic and sorted by `(protein_range_pdb_id,
   protein_resid, rna_resid)`.
 - `protein_range_pdb_id` is the one-based ID of the original `range_pdbs`
@@ -30,7 +31,7 @@ The implementation must preserve these contracts:
     "protein_resid": 93,
     "distance": 4.123,
     "tilt_angle": 12.345,
-    "slip_angle": 71.234,
+    "slip_angle": 18.766,
     "rna_centroid": [1.0, 2.0, 3.0],
     "protein_centroid": [4.0, 5.0, 6.0]
   }
@@ -40,7 +41,7 @@ The implementation must preserve these contracts:
   `(rna_resname, rna_resid, protein_range_pdb_id, protein_resid)`. Measurement
   changes update the row but do not make the same interaction “new”.
 - Newly seen rows default to selected exactly when `distance <= 5.0` and
-  `tilt_angle <= 30.0`.
+  `slip_angle < 60.0` (strict). Tilt plays no part in the default.
 - `stackings` is a read-only shared `plain` cell mounted at
   `deployment-mounts/stackings.json`. `stacking_selection` is a writable shared
   `plain` cell mounted read/write at
@@ -77,7 +78,8 @@ referentially transparent ordinary Python step before it is placed in the graph.
    Seamless boundary.
 5. Add `tests/backend/test_detect_stacking.py` in the same isolated style as
    `test_range_pdbs.py`. Cover a positive synthetic pair with independently
-   checked distance/tilt/slip; inclusive and just-outside distance/tilt cutoffs;
+   checked distance/tilt/slip (slip from the ring normal: zenith `0°`, horizon
+   `90°`); inclusive and just-outside distance/tilt cutoffs;
    absent ring atoms; non-ring residues; RNA aliases; multiple protein files and
    one-based IDs; deterministic ordering; empty/invalid input; and the repository
    `1b7f` fixture (RNA range 1 against protein ranges 2/3).
@@ -150,8 +152,8 @@ model without selection synchronization yet.
 2. Extend app state with stacking rows and a parallel boolean selection array.
    Provide explicit helpers to enter stage 3, return to stage 2, clear stacking
    state, compute stable row keys, merge a new table while preserving selections
-   for existing keys, and auto-select genuinely new rows using the `5 Å / 30°`
-   rule.
+   for existing keys, and auto-select genuinely new rows using the `distance <= 5 Å`,
+   `slip < 60°` rule.
 3. Add `Stage3Stackings.svelte` and `StackingTable.svelte`. Show all requested
    statistics in a read-only, accessible table; format numbers for display without
    changing stored values. In this phase the selection column may be displayed
@@ -200,15 +202,18 @@ control for two writable/readable shared values.
      table;
    - for any other defect, reject it with a visible/non-fatal sync error and do not
      overwrite valid app state.
-5. When a new table is merged and no valid backend selection supersedes it, push
-   the post-auto-assignment list immediately. When a checkbox changes, push the
-   complete updated boolean list immediately. Do not send writes when state was
-   merely applying a valid backend value, and do not create an echo loop.
+5. Receiving a table auto-selects new rows locally and never writes
+   `stacking_selection`: a computed cell must not write a decision. The selection
+   is written only by Continue 2→3 (the default list, written only when the stored
+   selection is empty or not yet read), by checkbox toggles (the complete updated
+   boolean list, immediately), and by Back (`[]`). Do not send writes when state
+   was merely applying a valid backend value, and do not create an echo loop.
 6. Add a Select checkbox per table row, with an accessible label identifying both
    residues. Add Vitest tests using a fake Seamless connector for exact-length
    remote application, queued length mismatch, next-empty-table behavior,
-   invalid-type rejection, auto-assignment push, user push, write rejection, and
-   echo suppression.
+   invalid-type rejection, local auto-assignment with no write on a table update,
+   user push, write rejection, and echo suppression (including an older backend
+   read racing an optimistic write).
 
 **Exit check:**
 
