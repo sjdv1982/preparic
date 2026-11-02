@@ -3,7 +3,7 @@
   import { appState } from '../lib/state.svelte';
   import StackingTable from './StackingTable.svelte';
 
-  let { onBack }: { onBack: () => void } = $props();
+  let { onBack, onContinue }: { onBack: () => void; onContinue: () => void } = $props();
 </script>
 
 <section class="stage-content stage-three-content">
@@ -31,5 +31,6 @@
 
   <div class="stage-footer stage-footer-split">
     <button class="button button-secondary" onclick={onBack}><span aria-hidden="true">←</span> Back to ranges</button>
+    <button class="button button-primary" onclick={onContinue}>Continue to best fits <span aria-hidden="true">→</span></button>
   </div>
 </section>

@@ -15,13 +15,15 @@ import { StateTransformer } from 'molstar/lib/mol-state/index.js';
 import { PluginStateObject as SO } from 'molstar/lib/mol-plugin-state/objects.js';
 import { ShapeRepresentation3D } from 'molstar/lib/mol-plugin-state/transforms/representation.js';
 import { StateSelection } from 'molstar/lib/mol-state/index.js';
+import type { ResidueIndex } from 'molstar/lib/mol-model/structure/model/indexing.js';
 import { chainExpression, complementExpression, rangeExpression, sidechainRangeExpression, unionExpression } from './expressions';
 import { stackingDashSegments, type DashSegment } from './stacking-geometry';
 import { nameChains, type ChainUnitInput } from '../chains';
 import { uniqueStackingParticipantRanges } from '../stackings';
-import type { AssemblyInfo, ChainInfo, PickInfo, RenderSpec, StackingViewerInput } from '../types';
+import type { AssemblyInfo, ChainInfo, PickInfo, RenderSpec, StackingViewerInput, Vec3 } from '../types';
 
 const RENDER_TAG = 'preparic-phase1-render';
+const PREPARED_PDB_TAG = 'preparic-prepared-pdb';
 interface StructureSource {
   cif: string;
   id: string;
@@ -29,6 +31,15 @@ interface StructureSource {
   trajectoryRef: any;
   modelRef: any;
   model: any;
+}
+interface PreparedPdbSource {
+  label: string;
+  dataRef: any;
+  trajectoryRef: any;
+  modelRef: any;
+  structureRef: any;
+  componentRef: any;
+  representationRef: any;
 }
 const StackingConnectorShape = StateTransformer.builderFactory('preparic')({
   name: 'stacking-centroid-connectors',
@@ -78,6 +89,7 @@ export class MolViewer {
   private activeSource: StructureSource | null = null;
   private stagedSource: StructureSource | null = null;
   private retiredSource: StructureSource | null = null;
+  private activePreparedPdbs: PreparedPdbSource[] = [];
   private loadToken = 0;
   private showToken = 0;
   private renderToken = 0;
@@ -190,6 +202,222 @@ export class MolViewer {
       this.activeSource = null;
       this.stagedSource = null;
       this.retiredSource = null;
+      this.activePreparedPdbs = [];
+    });
+    this.loadQueue = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  /** Load backend-prepared range PDB text without changing its atom records. */
+  showPreparedPdbs(
+    ranges: readonly { range: string; pdb: string }[],
+    overlays: readonly { label: string; pdb: string }[] = [],
+    isCurrent: () => boolean = () => true,
+  ): Promise<void> {
+    const token = ++this.loadToken;
+    this.downloadedCif = null;
+    const previousView = this.lastVisibleView;
+    const operation = this.loadQueue.then(async () => {
+      await this.showQueue;
+      await this.renderQueue;
+      if (token !== this.loadToken || !isCurrent()) return;
+      await this.discardStagedStructure();
+      const staged: PreparedPdbSource[] = [];
+      let activated = false;
+      try {
+        for (const item of ranges) {
+          if (typeof item.range !== 'string' || !/^range-[1-9]\d*$/.test(item.range)
+            || typeof item.pdb !== 'string' || !item.pdb.length) {
+            throw new Error('A prepared range PDB is missing its range address or text.');
+          }
+          const source = await this.stagePreparedPdb(item.pdb, `Prepared ${item.range}`, token, isCurrent);
+          if (!source) {
+            await this.discardPreparedPdbs(staged);
+            return;
+          }
+          staged.push(source);
+        }
+        for (const item of overlays) {
+          if (typeof item.pdb !== 'string' || !item.pdb.length) continue;
+          const source = await this.stagePreparedPdb(item.pdb, item.label, token, isCurrent);
+          if (!source) {
+            await this.discardPreparedPdbs(staged);
+            return;
+          }
+          staged.push(source);
+        }
+        if (token !== this.loadToken || !isCurrent()) {
+          await this.discardPreparedPdbs(staged);
+          return;
+        }
+
+        // Keep the current view intact until one guarded state update swaps
+        // visibility from the old structures to the fully staged set.
+        if (token !== this.loadToken || !isCurrent()) {
+          await this.discardPreparedPdbs(staged);
+          return;
+        }
+        const oldRenderRefs = this.renderTaggedRootRefs();
+        const oldStructureRef = this.structureRef;
+        const oldPreparedPdbs = [...this.activePreparedPdbs];
+        const oldActiveSource = this.activeSource;
+        const oldRetiredSource = this.retiredSource;
+        const state = this.plugin.state.data;
+        for (const ref of oldRenderRefs) {
+          state.updateCellState(ref, { isHidden: true });
+        }
+        for (const source of oldPreparedPdbs) {
+          if (source.representationRef) {
+            state.updateCellState(source.representationRef.ref, { isHidden: true });
+          }
+        }
+        for (const source of staged) {
+          state.updateCellState(source.representationRef.ref, { isHidden: false });
+        }
+        // The readiness check and all visibility updates above run in the
+        // same JavaScript turn. No async state commit can apply after a
+        // disconnect and hide the last visible view.
+        activated = true;
+        this.activePreparedPdbs = staged;
+        this.modelRef = null;
+        this.model = null;
+        this.structureRef = null;
+        this.loadedCif = null;
+        this.loadedId = null;
+        this.activeSource = null;
+        this.stagedSource = null;
+        this.retiredSource = null;
+        this.lastVisibleView = previousView;
+
+        // The old refs are hidden now. Cleanup cannot change the visible view
+        // if readiness changes while these asynchronous deletions run.
+        await this.deleteStateRefs(oldRenderRefs);
+        if (oldStructureRef) await this.deleteStateRefs([oldStructureRef]);
+        await this.discardPreparedPdbs(oldPreparedPdbs);
+        if (oldActiveSource) await this.deleteStructureSource(oldActiveSource);
+        if (oldRetiredSource && oldRetiredSource !== oldActiveSource) {
+          await this.deleteStructureSource(oldRetiredSource);
+        }
+        if (staged.length > 0 && token === this.loadToken && isCurrent()) {
+          this.plugin.managers.camera.reset();
+        }
+      } catch (error) {
+        if (!activated) await this.discardPreparedPdbs(staged);
+        if (token !== this.loadToken || !isCurrent()) return;
+        throw error;
+      }
+    });
+    this.loadQueue = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  private async stagePreparedPdb(
+    pdb: string,
+    label: string,
+    token: number,
+    isCurrent: () => boolean,
+  ): Promise<PreparedPdbSource | null> {
+    const staged: PreparedPdbSource = {
+      label,
+      dataRef: null,
+      trajectoryRef: null,
+      modelRef: null,
+      structureRef: null,
+      componentRef: null,
+      representationRef: null,
+    };
+    const current = () => token === this.loadToken && isCurrent();
+    try {
+      staged.dataRef = await this.plugin.builders.data.rawData({ data: pdb, label });
+      if (!current()) {
+        await this.discardPreparedPdbSource(staged);
+        return null;
+      }
+      staged.trajectoryRef = await this.plugin.builders.structure.parseTrajectory(staged.dataRef as never, 'pdb');
+      if (!current()) {
+        await this.discardPreparedPdbSource(staged);
+        return null;
+      }
+      staged.modelRef = await this.plugin.builders.structure.createModel(staged.trajectoryRef, { modelIndex: 0 });
+      if (!current()) {
+        await this.discardPreparedPdbSource(staged);
+        return null;
+      }
+      staged.structureRef = await this.plugin.builders.structure.createStructure(staged.modelRef);
+      if (!current()) {
+        await this.discardPreparedPdbSource(staged);
+        return null;
+      }
+      const component = await this.plugin.builders.structure.tryCreateComponentStatic(
+        staged.structureRef,
+        'all',
+        { label, tags: [PREPARED_PDB_TAG] },
+      );
+      if (!component || !current()) {
+        await this.discardPreparedPdbSource(staged);
+        return null;
+      }
+      staged.componentRef = component;
+      staged.representationRef = await this.plugin.builders.structure.representation.addRepresentation(component, {
+        type: 'ball-and-stick',
+        color: 'element-symbol',
+        typeParams: { visuals: ['intra-bond'] },
+      }, { tag: PREPARED_PDB_TAG, initialState: { isHidden: true } });
+      if (!current()) {
+        await this.discardPreparedPdbSource(staged);
+        return null;
+      }
+      return staged;
+    } catch (error) {
+      await this.discardPreparedPdbSource(staged);
+      if (!current()) return null;
+      throw new Error(readableLoadError(error));
+    }
+  }
+
+  private async discardPreparedPdbSource(source: PreparedPdbSource): Promise<void> {
+    await this.deleteStateRefs([
+      source.representationRef,
+      source.componentRef,
+      source.structureRef,
+      source.modelRef,
+      source.trajectoryRef,
+      source.dataRef,
+    ]);
+  }
+
+  private async discardPreparedPdbs(sources: PreparedPdbSource[]): Promise<void> {
+    if (sources.length === 0) return;
+    await this.deleteStateRefs(sources.flatMap(source => [
+      source.representationRef,
+      source.componentRef,
+      source.structureRef,
+      source.modelRef,
+      source.trajectoryRef,
+      source.dataRef,
+    ]));
+  }
+
+  /** Clear stage-4 structures while keeping the selected RCSB assembly restorable. */
+  clearPreparedPdbs(): Promise<void> {
+    const token = ++this.loadToken;
+    const previousView = this.lastVisibleView;
+    const pendingLoad = this.loadQueue;
+    const pendingShow = this.showQueue;
+    const pendingRender = this.renderQueue;
+    const operation = Promise.all([pendingLoad, pendingShow, pendingRender]).then(async () => {
+      if (token !== this.loadToken) return;
+      await this.plugin.clear();
+      this.modelRef = null;
+      this.model = null;
+      this.structureRef = null;
+      this.loadedCif = null;
+      this.loadedId = null;
+      this.activeSource = null;
+      this.stagedSource = null;
+      this.retiredSource = null;
+      this.activePreparedPdbs = [];
+      this.lastVisibleView = previousView;
     });
     this.loadQueue = operation.then(() => undefined, () => undefined);
     return operation;
@@ -314,68 +542,127 @@ export class MolViewer {
 
   async restoreLastVisibleView(): Promise<void> {
     const snapshot = this.lastVisibleView;
-    await this.discardStagedStructure();
+    await this.clearPreparedPdbs();
     if (!snapshot) return;
-    if (this.retiredSource) {
-      const failedSource = this.activeSource;
-      if (this.structureRef) {
-        await this.deleteStateRefs([this.structureRef]);
-        this.structureRef = null;
-      }
-      this.activeSource = this.retiredSource;
-      this.retiredSource = null;
-      this.modelRef = this.activeSource.modelRef;
-      this.model = this.activeSource.model;
-      this.loadedCif = this.activeSource.cif;
-      this.loadedId = this.activeSource.id;
-      await this.deleteStructureSource(failedSource);
-    }
-    if (this.structureRef && this.activeSource?.cif === snapshot.cif
-      && this.activeSource.id === snapshot.id) return;
-    if (!this.activeSource || this.activeSource.cif !== snapshot.cif || this.activeSource.id !== snapshot.id) {
-      const assemblies = await this.loadCif(snapshot.cif, snapshot.id);
-      if (!assemblies?.some(assembly => assembly.id === snapshot.assemblyId)) return;
-      this.activateStagedStructure();
-    }
-    await this.showAssembly(snapshot.assemblyId);
+    const assemblies = await this.loadCif(snapshot.cif, snapshot.id);
+    if (!assemblies?.some(assembly => assembly.id === snapshot.assemblyId)) return;
+    await this.showStagedAssembly(snapshot.assemblyId, () => true, () => true);
   }
 
-  showAssembly(id: string): Promise<void> {
+  showAssembly(
+    id: string,
+    isCurrent: () => boolean = () => true,
+    beforeSwap?: () => boolean,
+  ): Promise<void> {
     const token = ++this.showToken;
-    const operation = this.showQueue.then(() => this.showAssemblyNow(id, token));
+    const operation = this.showQueue.then(() => this.showAssemblyNow(id, token, isCurrent, false, beforeSwap));
     this.showQueue = operation.then(() => undefined, () => undefined);
     return operation;
   }
 
-  private async showAssemblyNow(id: string, token: number): Promise<void> {
-    if (token !== this.showToken) return;
-    if (!this.modelRef || !this.model) throw new Error('Load a PDB entry before choosing an assembly.');
-    const validIds = new Set((ModelSymmetry.Provider.get(this.model)?.assemblies ?? []).map(assembly => assembly.id));
+
+  showStagedAssembly(
+    id: string,
+    isCurrent: () => boolean,
+    beforeSwap: () => boolean,
+  ): Promise<void> {
+    const token = ++this.showToken;
+    const operation = this.showQueue.then(() => this.showAssemblyNow(id, token, isCurrent, true, beforeSwap));
+    this.showQueue = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  private async showAssemblyNow(
+    id: string,
+    token: number,
+    isCurrent: () => boolean,
+    useStagedSource = false,
+    beforeSwap?: () => boolean,
+  ): Promise<void> {
+    const stagedSource = useStagedSource ? this.stagedSource : null;
+    const modelRef = useStagedSource ? stagedSource?.modelRef : this.modelRef;
+    const model = useStagedSource ? stagedSource?.model : this.model;
+    const current = () => token === this.showToken
+      && isCurrent()
+      && (!useStagedSource || this.stagedSource === stagedSource);
+    if (!current()) return;
+    if (!modelRef || !model) throw new Error('Load a PDB entry before choosing an assembly.');
+    const validIds = new Set((ModelSymmetry.Provider.get(model)?.assemblies ?? []).map(assembly => assembly.id));
     const isAsymmetricUnit = id === 'model';
     if (!isAsymmetricUnit && !validIds.has(id)) throw new Error(`Assembly ${id} is not available for this entry.`);
 
-    if (this.structureRef) {
-      await this.plugin.state.data.build().delete(this.structureRef).commit();
-      this.structureRef = null;
-    }
-    if (token !== this.showToken) return;
-    const structure = await this.plugin.builders.structure.createStructure(this.modelRef, isAsymmetricUnit
-      ? { name: 'model', params: {} }
-      : { name: 'assembly', params: { id } });
-    if (token !== this.showToken) {
-      await this.plugin.state.data.build().delete(structure).commit();
-      return;
-    }
-    this.structureRef = structure;
-    await this.render({ focus: null });
-    if (token === this.showToken) {
-      this.plugin.managers.camera.reset();
+    await this.renderQueue;
+    if (!current()) return;
+
+    const stagedRefs: unknown[] = [];
+    let activated = false;
+    try {
+      const structure = await this.plugin.builders.structure.createStructure(modelRef, isAsymmetricUnit
+        ? { name: 'model', params: {} }
+        : { name: 'assembly', params: { id } });
+      stagedRefs.push(structure);
+      if (!current()) {
+        await this.deleteStateRefs(stagedRefs);
+        return;
+      }
+
+      const component = await this.plugin.builders.structure.tryCreateComponentStatic(
+        structure,
+        'polymer',
+        { label: 'Polymer', tags: [RENDER_TAG] },
+      );
+      if (component) stagedRefs.push(component);
+      if (!current()) {
+        await this.deleteStateRefs(stagedRefs);
+        return;
+      }
+
+      let representationRef: { ref: string } | undefined;
+      if (component) {
+        representationRef = await this.plugin.builders.structure.representation.addRepresentation(component, {
+          type: 'cartoon',
+          color: 'chain-id',
+        }, { tag: RENDER_TAG, initialState: { isHidden: true } });
+        stagedRefs.push(representationRef);
+      }
+      if (!current()) {
+        await this.deleteStateRefs(stagedRefs);
+        return;
+      }
+      if (beforeSwap && !beforeSwap()) {
+        await this.deleteStateRefs(stagedRefs);
+        return;
+      }
+      if (useStagedSource) this.activateStagedStructure();
+
+      const oldStructureRef = this.structureRef;
+      const retiredSource = this.retiredSource;
+      const oldRenderRefs = this.renderTaggedRootRefs().filter(ref => ref !== component?.ref);
+      const state = this.plugin.state.data;
+      // The target check, share commit, source activation, and visibility
+      // change run without an await, so stale work cannot replace the last view.
+      for (const ref of oldRenderRefs) state.updateCellState(ref, { isHidden: true });
+      if (representationRef) state.updateCellState(representationRef.ref, { isHidden: false });
+      this.structureRef = structure;
+      activated = true;
       if (this.loadedCif && this.loadedId) {
         this.lastVisibleView = { cif: this.loadedCif, id: this.loadedId, assemblyId: id };
       }
-      const retired = this.retiredSource;
-      this.retiredSource = null;
-      await this.deleteStructureSource(retired);
+      try { this.plugin.managers.camera.reset(); } catch { /* A camera reset does not undo the committed view. */ }
+
+      // Only hidden refs from the previous assembly are removed after the
+      // authorized swap. A stale cleanup cannot blank the new assembly.
+      await this.deleteStateRefs(oldRenderRefs);
+      if (oldStructureRef) await this.deleteStateRefs([oldStructureRef]);
+      if (retiredSource && retiredSource !== this.activeSource) {
+        this.retiredSource = null;
+        await this.deleteStructureSource(retiredSource);
+      }
+    } catch (error) {
+      if (activated) return;
+      await this.deleteStateRefs(stagedRefs);
+      if (!current()) return;
+      throw new Error(readableLoadError(error));
     }
   }
 
@@ -383,7 +670,12 @@ export class MolViewer {
     const structure = this.structureRef?.obj?.data;
     if (!structure) return [];
 
-    const grouped = new Map<string, ChainUnitInput & { seqIds: Set<number> }>();
+    type RnaAtoms = { o3?: Vec3; phosphorus?: Vec3 };
+    const grouped = new Map<string, ChainUnitInput & {
+      seqIds: Set<number>;
+      rnaBreakAfter: Set<number>;
+      residueAtoms: Map<number, RnaAtoms>;
+    }>();
     for (const unit of structure.units) {
       if (!Unit.isAtomic(unit) || unit.polymerElements.length === 0) continue;
       const element = unit.elements[0];
@@ -393,15 +685,55 @@ export class MolViewer {
       const key = `${labelAsymId}\u0000${instanceId}`;
       let chain = grouped.get(key);
       if (!chain) {
-        chain = { labelAsymId, instanceId, isIdentity: unit.conformation.operator.isIdentity, seqIds: new Set<number>() };
+        chain = {
+          labelAsymId,
+          instanceId,
+          isIdentity: unit.conformation.operator.isIdentity,
+          seqIds: new Set<number>(),
+          rnaBreakAfter: new Set<number>(),
+          residueAtoms: new Map<number, RnaAtoms>(),
+        };
         grouped.set(key, chain);
       }
-      const labelSeqIds = unit.model.atomicHierarchy.residues.label_seq_id;
+      const hierarchy = unit.model.atomicHierarchy;
+      const labelSeqIds = hierarchy.residues.label_seq_id;
+      const residueIndices = new Set<ResidueIndex>();
       for (let i = 0; i < unit.polymerElements.length; i += 1) {
-        const elementIndex = unit.polymerElements[i];
-        const residueIndex = unit.residueIndex[elementIndex];
+        residueIndices.add(unit.residueIndex[unit.polymerElements[i]]);
+      }
+      for (const residueIndex of residueIndices) {
         const seqId = labelSeqIds.value(residueIndex);
-        if (Number.isInteger(seqId) && seqId > 0) chain.seqIds.add(seqId);
+        if (!Number.isInteger(seqId) || seqId <= 0) continue;
+        chain.seqIds.add(seqId);
+        const atoms = chain.residueAtoms.get(seqId) ?? {};
+        const atomPosition = (...names: string[]): Vec3 | undefined => {
+          const atomIndex = names.map(name => hierarchy.index.findAtomOnResidue(residueIndex, name))
+            .find(index => index >= 0);
+          if (atomIndex === undefined) return undefined;
+          const point = MolVec3.create(0, 0, 0);
+          unit.conformation.position(atomIndex, point);
+          return [point[0], point[1], point[2]];
+        };
+        atoms.o3 ??= atomPosition("O3'", 'O3*');
+        atoms.phosphorus ??= atomPosition('P');
+        chain.residueAtoms.set(seqId, atoms);
+      }
+    }
+    for (const chain of grouped.values()) {
+      const sequence = [...chain.seqIds].sort((a, b) => a - b);
+      for (let index = 1; index < sequence.length; index += 1) {
+        const before = sequence[index - 1];
+        const after = sequence[index];
+        if (after !== before + 1) continue;
+        const oxygen = chain.residueAtoms.get(before)?.o3;
+        const phosphorus = chain.residueAtoms.get(after)?.phosphorus;
+        if (!oxygen || !phosphorus) continue;
+        const distance = Math.hypot(
+          oxygen[0] - phosphorus[0],
+          oxygen[1] - phosphorus[1],
+          oxygen[2] - phosphorus[2],
+        );
+        if (!Number.isFinite(distance) || distance > 2.5) chain.rnaBreakAfter.add(before);
       }
     }
     return nameChains([...grouped.values()]);
@@ -517,14 +849,16 @@ export class MolViewer {
   }
 
   private async deleteRenderTaggedNodes(): Promise<void> {
+    await this.deleteStateRefs(this.renderTaggedRootRefs());
+  }
+
+  private renderTaggedRootRefs(): string[] {
     const tagged = StateSelection.Generators.root.subtree().withTag(RENDER_TAG).select(this.plugin.state.data);
-    if (tagged.length === 0) return;
+    if (tagged.length === 0) return [];
     const taggedRefs = new Set(tagged.map(cell => cell.transform.ref));
-    const update = this.plugin.state.data.build();
-    for (const cell of tagged) {
-      if (!taggedRefs.has(cell.transform.parent)) update.delete(cell.transform.ref);
-    }
-    await update.commit();
+    return tagged
+      .filter(cell => !taggedRefs.has(cell.transform.parent))
+      .map(cell => cell.transform.ref);
   }
 
   private getAssemblies(model: any): AssemblyInfo[] {

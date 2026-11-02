@@ -87,7 +87,7 @@
       if (request !== requestId) return;
       if (!sharedStructureTargetIsCurrent(structureTarget)) {
         commitSharedStructure(id, structureTarget); // Adopts the stale-completion notice and drops staged CIF bytes.
-        await viewer.restoreLastVisibleView();
+        await viewer.discardStagedStructure();
         throw new Error(seamlessState.syncNotice || 'The shared project changed while this structure was loading; the downloaded CIF was discarded.');
       }
       if (!assemblies) return;
@@ -97,19 +97,24 @@
         : 1;
       const selectedAssembly = assemblies[selectedIndex - 1];
       if (!selectedAssembly) throw new Error('No biological units or polymer chains were found.');
-      if (!commitSharedStructure(id, structureTarget)) {
-        await viewer.restoreLastVisibleView();
-        throw new Error(seamlessState.syncNotice || 'The downloaded structure could not be committed to the shared project.');
-      }
-      committed = true;
-      viewer.activateStagedStructure();
-      appState.assemblies = assemblies;
-      appState.biounitIndex = selectedIndex;
-      appState.assemblyId = selectedAssembly.id;
-      await viewer.showAssembly(selectedAssembly.id);
-      if (request === requestId) {
+      const isCurrentAssembly = () => request === requestId && sharedStructureTargetIsCurrent(structureTarget);
+      await viewer.showStagedAssembly(selectedAssembly.id, isCurrentAssembly, () => {
+        if (!commitSharedStructure(id, structureTarget)) return false;
+        appState.assemblies = assemblies;
+        appState.biounitIndex = selectedIndex;
+        appState.assemblyId = selectedAssembly.id;
         appState.structureReady = true;
+        committed = true;
         shouldContinue = continueAfterLoad;
+        return true;
+      });
+      if (!committed) {
+        await viewer.discardStagedStructure();
+        if (request === requestId) {
+          appState.error = !sharedStructureTargetIsCurrent(structureTarget)
+            ? seamlessState.syncNotice || 'The shared project changed while this structure was loading; the staged assembly was discarded.'
+            : 'The selected biological assembly could not be displayed.';
+        }
       }
     } catch (error) {
       if (request === requestId) {
@@ -135,15 +140,23 @@
     if (selectedIndex < 1) return;
     const request = ++requestId;
     if (debounce) clearTimeout(debounce);
-    appState.assemblyId = id;
-    appState.biounitIndex = selectedIndex;
-    appState.structureReady = false;
     appState.loading = true;
     appState.error = '';
-    setSharedBiounitIndex(selectedIndex);
+    const structureTarget = captureSharedStructureTarget();
+    const isCurrentAssembly = () => request === requestId && sharedStructureTargetIsCurrent(structureTarget);
+    let committed = false;
     try {
-      await viewer?.showAssembly(id);
-      if (request === requestId) appState.structureReady = true;
+      await viewer?.showAssembly(id, isCurrentAssembly, () => {
+        if (!isCurrentAssembly() || !setSharedBiounitIndex(selectedIndex)) return false;
+        appState.assemblyId = id;
+        appState.biounitIndex = selectedIndex;
+        appState.structureReady = true;
+        committed = true;
+        return true;
+      });
+      if (!committed && request === requestId && isCurrentAssembly()) {
+        appState.error = 'The selected biological assembly could not be committed.';
+      }
     } catch (error) {
       if (request === requestId) appState.error = error instanceof Error ? error.message : String(error);
     } finally {

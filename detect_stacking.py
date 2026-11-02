@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-def _detect_stacking(range_pdbs: list[str]) -> list[dict]:
+def _detect_stacking(range_pdbs: list[str], ring_references: dict | None = None) -> list[dict]:
     """Return deterministic RNA--protein ring pairs from range PDB text.
 
     ``range_pdbs[0]`` is the RNA structure and subsequent entries are protein
@@ -65,6 +65,52 @@ def _detect_stacking(range_pdbs: list[str]) -> list[dict]:
             raise ValueError("ring atoms do not define a finite plane")
         return normal / norm
 
+    reference_coordinates = {}
+
+    def fitted_reference_normal(coordinates: np.ndarray, atom_names: tuple[str, ...], resname: str) -> np.ndarray:
+        if ring_references is None:
+            return fit_plane_normal(coordinates)
+        # These are the reference aliases used by Alaric's Gaussian geometry
+        # contract: the purine ring fit uses A coordinates for G, pyrimidine
+        # U uses C, and TYR uses PHE. The target atom names stay unchanged.
+        reference_name = {"G": "A", "U": "C", "TYR": "PHE"}.get(resname, resname)
+        reference_text = ring_references.get(reference_name)
+        if reference_text is None:
+            reference_text = ring_references.get(f"refe-{reference_name}.pdb")
+        if isinstance(reference_text, bytes):
+            try:
+                reference_text = reference_text.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise ValueError(f"ring reference {reference_name} is not UTF-8 PDB text") from exc
+        if not isinstance(reference_text, str) or not reference_text.strip():
+            raise ValueError(f"ring reference {reference_name} is missing or empty")
+        if reference_name not in reference_coordinates:
+            try:
+                reference_structure = PDBParser(QUIET=True).get_structure(
+                    f"ring-reference-{reference_name}", StringIO(reference_text)
+                )
+                reference_model = next(reference_structure.get_models(), None)
+                reference_residue = next(reference_model.get_residues(), None) if reference_model else None
+                if reference_residue is None:
+                    raise ValueError("the reference has no residue")
+                reference_coordinates[reference_name] = np.asarray(
+                    [reference_residue[name].coord for name in atom_names], dtype=float
+                )
+            except Exception as exc:
+                raise ValueError(f"ring reference {reference_name} is invalid: {exc}") from exc
+        reference = reference_coordinates[reference_name]
+        centered_reference = reference - reference.mean(axis=0)
+        centered_observed = coordinates - coordinates.mean(axis=0)
+        left, _, right = np.linalg.svd(centered_reference.T @ centered_observed)
+        correction = np.eye(3)
+        correction[-1, -1] = np.linalg.det(left @ right)
+        row_rotation = left @ correction @ right
+        normal = np.linalg.svd(centered_reference, full_matrices=False)[2][-1] @ row_rotation
+        norm = float(np.linalg.norm(normal))
+        if not math.isfinite(norm) or norm == 0:
+            raise ValueError(f"ring reference {reference_name} does not define a finite plane")
+        return normal / norm
+
     def complete_rings(model, allowed_resnames: frozenset[str]):
         rings_found = []
         for residue in model.get_residues():
@@ -83,7 +129,7 @@ def _detect_stacking(range_pdbs: list[str]) -> list[dict]:
                     f"residue {resname} {residue.id[1]} has non-finite coordinates"
                 )
             centroid = coordinates.mean(axis=0)
-            normal = fit_plane_normal(coordinates)
+            normal = fitted_reference_normal(coordinates, atom_names, resname)
             rings_found.append((resname, int(residue.id[1]), centroid, normal))
         return rings_found
 

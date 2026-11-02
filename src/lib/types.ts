@@ -10,6 +10,7 @@ export interface ChainInfo extends ChainKey {
   seqIds: Set<number>;
   seqMin: number;
   seqMax: number;
+  rnaBreakAfter?: Set<number>;
 }
 
 export type RangeColumn = 'chain' | 'start' | 'end';

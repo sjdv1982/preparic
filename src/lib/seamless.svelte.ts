@@ -18,6 +18,7 @@ type DecisionKey = 'ranges' | 'stacking_selection' | 'threshold_edits' | 'best_f
 type ShareKey = 'pdbcode' | 'biounit' | 'ranges' | 'range_specs' | 'stackings' | 'stacking_selection'
   | 'threshold_edits' | 'best_fit_clip' | 'interaction_matrix' | 'gaussian_classes' | 'energy_threshold_edits'
   | 'structure_id' | 'range_pdbs_aa' | 'fragments' | 'best_fit_thresholds' | 'best_fits' | 'energetics'
+  | 'reference_fragment_pdbs'
   | 'energy_thresholds' | 'interactions' | 'bestfit_stackings' | 'gaussian_validation' | 'refe_validation'
   | 'gaussian_scores';
 
@@ -63,6 +64,7 @@ export interface ShareContext {
   structure_id?: SharedCell;
   range_pdbs_aa?: SharedCell;
   fragments?: SharedCell;
+  reference_fragment_pdbs?: SharedCell;
   best_fit_thresholds?: SharedCell;
   best_fits?: SharedCell;
   energetics?: SharedCell;
@@ -88,6 +90,7 @@ export interface SharedStructureTarget {
   stageAtIssue: ProjectStage;
   liveAtIssue: boolean;
   connectionRevision: number;
+  biounitIndex: number;
   pdbCodeRevision: number;
   cifRevision: number;
   pdbCodeMarker: number | undefined;
@@ -475,10 +478,15 @@ function currentComputedEcho(key: ShareKey): unknown | null {
       return { structure_id: structureId, pdbcode: seamlessState.pdbCode, biounit: rs.biounit, rows: rs.rows };
     }
     case 'fragments': return firstRange ? { pdbcode: seamlessState.pdbCode, rna: firstRange } : null;
+    case 'reference_fragment_pdbs': {
+      const fragmentMap = computedValue('fragments');
+      return fragmentMap && typeof fragmentMap === 'object' && 'echo' in fragmentMap
+        ? (fragmentMap as { echo: unknown }).echo : null;
+    }
     case 'best_fit_thresholds':
     case 'best_fits':
       return fragmentResidues === null || !firstRange ? null
-        : { pdb_code: seamlessState.pdbCode, rna: firstRange, resids: fragmentResidues };
+        : { pdb_code: seamlessState.pdbCode.toLowerCase(), rna: firstRange, resids: fragmentResidues };
     case 'energetics':
     case 'energy_thresholds':
     case 'bestfit_stackings':
@@ -504,7 +512,7 @@ function currentComputedEcho(key: ShareKey): unknown | null {
 
 function refreshComputedFreshness(): void {
   const keys: ShareKey[] = [
-    'stackings', 'fragments', 'best_fit_thresholds', 'best_fits', 'energetics', 'energy_thresholds',
+    'stackings', 'fragments', 'reference_fragment_pdbs', 'best_fit_thresholds', 'best_fits', 'energetics', 'energy_thresholds',
     'bestfit_stackings', 'gaussian_scores', 'gaussian_validation', 'refe_validation', 'range_pdbs_aa',
   ];
   const freshness: Partial<Record<ShareKey, boolean>> = {};
@@ -519,7 +527,7 @@ function refreshComputedFreshness(): void {
   const reduced = computedValue('range_pdbs_aa');
   freshness.range_pdbs_aa = !!reduced && typeof reduced === 'object'
     && echoIsFresh((reduced as { range_specs?: unknown }).range_specs, currentRanges)
-    && (reduced as { pdb_code?: unknown }).pdb_code === seamlessState.pdbCode;
+    && (reduced as { pdb_code?: unknown }).pdb_code === seamlessState.pdbCode.toLowerCase();
   seamlessState.computedFreshness = freshness;
 }
 
@@ -941,6 +949,7 @@ function attachShare(key: ShareKey, keys: string[]): void {
     case 'structure_id':
     case 'range_pdbs_aa':
     case 'fragments':
+    case 'reference_fragment_pdbs':
     case 'best_fit_thresholds':
     case 'best_fits':
     case 'energetics':
@@ -1011,7 +1020,7 @@ async function resynchronizeShares(keys: string[]): Promise<void> {
   const ordered: ShareKey[] = [
     'pdbcode', 'biounit', 'ranges', 'stacking_selection', 'threshold_edits',
     'best_fit_clip', 'interaction_matrix', 'gaussian_classes', 'energy_threshold_edits',
-    'range_specs', 'structure_id', 'range_pdbs_aa', 'stackings', 'fragments',
+    'range_specs', 'structure_id', 'range_pdbs_aa', 'stackings', 'fragments', 'reference_fragment_pdbs',
     'best_fit_thresholds', 'best_fits', 'energetics', 'energy_thresholds', 'interactions',
     'bestfit_stackings', 'gaussian_validation', 'refe_validation', 'gaussian_scores',
   ];
@@ -1102,7 +1111,7 @@ function attachShareContext(context: ShareContext): void {
     attachShare('stackings', keys);
     for (const key of [
       'threshold_edits', 'best_fit_clip', 'interaction_matrix', 'gaussian_classes', 'energy_threshold_edits',
-      'range_specs', 'structure_id', 'range_pdbs_aa', 'fragments', 'best_fit_thresholds', 'best_fits',
+      'range_specs', 'structure_id', 'range_pdbs_aa', 'fragments', 'reference_fragment_pdbs', 'best_fit_thresholds', 'best_fits',
       'energetics', 'energy_thresholds', 'interactions', 'bestfit_stackings', 'gaussian_validation',
       'refe_validation', 'gaussian_scores',
     ] as const) attachShare(key, keys);
@@ -1194,6 +1203,7 @@ export function captureSharedStructureTarget(): SharedStructureTarget {
     stageAtIssue: seamlessState.projectStage,
     liveAtIssue: seamlessState.ready && seamlessState.status === 'live',
     connectionRevision: structureConnectionRevision,
+    biounitIndex: seamlessState.biounitIndex,
     pdbCodeRevision: structureShareRevisions.pdbcode,
     cifRevision: structureShareRevisions.cif,
     pdbCodeMarker: client?.pdbcode?.marker,
@@ -1210,6 +1220,7 @@ export function sharedStructureTargetIsCurrent(target: SharedStructureTarget): b
     && seamlessState.status === 'live'
     && seamlessState.projectStage === target.stageAtIssue
     && target.connectionRevision === structureConnectionRevision
+    && target.biounitIndex === seamlessState.biounitIndex
     && target.pdbCodeRevision === structureShareRevisions.pdbcode
     && target.cifRevision === structureShareRevisions.cif
     && !!codeCell && !!cifCell

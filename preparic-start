@@ -51,6 +51,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="force Vite to rebuild its optimized dependencies",
     )
+    parser.add_argument(
+        "--alaric-dir",
+        type=Path,
+        metavar="PATH",
+        help="Alaric package directory (also configurable through ALARIC_DIR)",
+    )
     args = parser.parse_args()
     if args.shell and args.log is None:
         parser.error("--shell requires --log")
@@ -124,11 +130,16 @@ def main() -> int:
     # Each server gets its own session, so Ctrl-C reaches only this process,
     # which then stops them in order. The stdin pipe stays open until
     # shutdown: backend.py waits on it.
+    child_env = os.environ.copy()
+    if args.alaric_dir is not None:
+        child_env["ALARIC_DIR"] = str(args.alaric_dir.expanduser())
+
     detached = dict(
         cwd=PROJECT_ROOT,
         stdin=subprocess.PIPE,
         stdout=log,
         stderr=subprocess.STDOUT if log else None,
+        env=child_env,
         start_new_session=True,
     )
     vite_command = [npm, "run", "dev"]
@@ -136,7 +147,7 @@ def main() -> int:
         vite_command.extend(["--", "--force"])
     vite = (vite_command, detached)
     if args.shell:
-        servers = {"vite": vite, "backend": (shell_command(), dict(cwd=PROJECT_ROOT))}
+        servers = {"vite": vite, "backend": (shell_command(), dict(cwd=PROJECT_ROOT, env=child_env))}
     else:
         backend = [sys.executable, "-u", str(PROJECT_ROOT / "backend.py")]
         servers = {"backend": (backend, detached), "vite": vite}

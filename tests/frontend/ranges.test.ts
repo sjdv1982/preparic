@@ -24,8 +24,10 @@ describe('range row normalization', () => {
 });
 
 describe('validateRows', () => {
-  it('accepts label sequence ids that exist in the selected chain', () => {
-    expect(validateRows([row({ start: '2', end: '10' })], chains)).toEqual([]);
+  it('refuses an RNA interval with missing internal label sequence ids', () => {
+    const issues = validateRows([row({ start: '2', end: '10' })], chains);
+    expect(issues).toHaveLength(1);
+    expect(issues[0].message).toContain('unobserved residues: 3, 4, 5, 6, 7, 8, 9');
   });
 
   it('reports unknown chains, missing cells on submit, and residues outside a chain', () => {

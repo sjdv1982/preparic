@@ -58,8 +58,8 @@ def test_requires_ranges_list(specs):
     ({"chain": "A", "end": 4}, "missing its start residue"),
     ({"chain": "A", "start": 1}, "missing its end residue"),
     ({"chain": "A", "start": 4, "end": 1}, "starts after it ends"),
-    ({"chain": "absent", "start": 1, "end": 4}, "not present in the CIF"),
-    ({"chain": "A", "start": 1000, "end": 1001}, "contains no atoms"),
+    ({"chain": "absent", "start": 1, "end": 4}, "not present in the selected biological assembly"),
+    ({"chain": "A", "start": 1000, "end": 1001}, "unobserved residues: 1000, 1001"),
     ({"chain": "C", "start": 2, "end": 4}, "expected RNA"),
 ])
 def test_invalid_range(cif_text, spec, message):
@@ -83,8 +83,31 @@ def test_accepts_integer_valued_boundaries(cif_text, expected_pdbs, start, end):
 
 
 def test_assembly_copy_suffix(cif_text, range_specs, expected_pdbs):
+    data = MMCIF2Dict(StringIO(cif_text))
+    data["_pdbx_struct_oper_list.id"] = ["1", "2", "3"]
+    data["_pdbx_struct_oper_list.type"] = [
+        "identity operation", "translation operation", "translation operation",
+    ]
+    data["_pdbx_struct_oper_list.name"] = ["1_555", "copy2", "copy3"]
+    data["_pdbx_struct_oper_list.symmetry_operation"] = ["x,y,z", "x+10,y,z", "x+20,y,z"]
+    translations = [(0, 0, 0), (10, 0, 0), (20, 0, 0)]
+    for row in range(1, 4):
+        data[f"_pdbx_struct_oper_list.vector[{row}]"] = [str(value[row - 1]) for value in translations]
+        for column in range(1, 4):
+            data[f"_pdbx_struct_oper_list.matrix[{row}][{column}]"] = [
+                "1" if row == column else "0" for _ in translations
+            ]
+    data["_pdbx_struct_assembly_gen.assembly_id"] = ["1"]
+    data["_pdbx_struct_assembly_gen.oper_expression"] = ["(1,2,3)"]
+    data["_pdbx_struct_assembly_gen.asym_id_list"] = ["A,C"]
+    writer = MMCIFIO()
+    writer.set_dict(data)
+    synthetic = StringIO()
+    writer.save(synthetic)
+
     range_specs["ranges"][0]["chain"] = "A-2"
-    assert _ranges_to_pdb(cif_text, range_specs) == expected_pdbs
+    extracted = _ranges_to_pdb(synthetic.getvalue(), range_specs)
+    assert [residues(pdb) for pdb in extracted] == [residues(pdb) for pdb in expected_pdbs]
 
 
 def test_later_ranges_must_be_protein(cif_text):
@@ -122,6 +145,10 @@ def test_multicharacter_chain_is_written_as_a(cif_text, range_specs, expected_pd
     data = MMCIF2Dict(StringIO(cif_text))
     for field in ("_struct_asym.id", "_atom_site.label_asym_id"):
         data[field] = ["RNA" if value == "A" else value for value in data[field]]
+    data["_pdbx_struct_assembly_gen.asym_id_list"] = [
+        ",".join("RNA" if asym == "A" else asym for asym in value.split(","))
+        for value in data["_pdbx_struct_assembly_gen.asym_id_list"]
+    ]
     writer = MMCIFIO()
     writer.set_dict(data)
     output = StringIO()

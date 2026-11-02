@@ -18,6 +18,15 @@ import yaml
 from seamless import Cell
 from seamless_transformer import Transformer
 from seamless_workflow import Context, shareserver
+from alaric_dir import resolve_alaric_dir
+from alaric_runtime import (
+    best_fit_factory,
+    best_fit_tables_transformer,
+    fragment_library_identities,
+    refe_fragments_transformer,
+    threshold_module_code,
+    thresholds_from_tables,
+)
 from range_pdbs import _pdbs_to_folder, _ranges_to_pdb
 from detect_stacking import _detect_stacking
 
@@ -36,6 +45,7 @@ GAUSSIAN_CLASSES_PATH = MOUNT_DIRECTORY / "gaussian-classes.json"
 ENERGY_THRESHOLD_EDITS_PATH = MOUNT_DIRECTORY / "energy-threshold-edits.json"
 PDBS_PATH = MOUNT_DIRECTORY / "pdbs"
 PDBS_AA_PATH = MOUNT_DIRECTORY / "pdbs-aa"
+CLIPPED_FRAGMENTS_PATH = MOUNT_DIRECTORY / "clipped-fragments"
 
 LOCAL_WORKER_COUNT = 8
 _LOCAL_EXECUTION_CONFIGURED = False
@@ -397,16 +407,156 @@ def _structure_id(cif: str) -> str:
     return value.strip().upper()
 
 
+def _lower_code(pdbcode: str) -> str:
+    return pdbcode.strip().lower() if isinstance(pdbcode, str) and pdbcode.strip() else ""
+
+
+def _protein_pdbs_from_aareduce(pdb_files: dict) -> dict:
+    if not isinstance(pdb_files, dict):
+        return {}
+    return {
+        name: value for name, value in pdb_files.items()
+        if isinstance(name, str) and name.startswith("range-") and name.endswith("-aa.pdb")
+        and name != "range-1-aa.pdb" and isinstance(value, bytes)
+    }
+
+
+def _first_rna_range(range_specs: dict) -> dict | None:
+    if not isinstance(range_specs, dict) or range_specs.get("schema") != 1:
+        return None
+    rows = range_specs.get("rows")
+    return dict(rows[0]) if isinstance(rows, list) and rows and isinstance(rows[0], dict) else None
+
+
+def _fit_input_gate(rna_pdb: bytes | None, selection: object) -> bytes | None:
+    """Leave T5 unwired at the content level until S8 is active."""
+    rna_pdb = getattr(rna_pdb, "content", rna_pdb)
+    if not isinstance(rna_pdb, bytes) or not isinstance(selection, dict) \
+        or selection.get("active") is not True:
+        return None
+    return rna_pdb
+
+
+def _stackings_envelope(
+    range_pdbs: list[str],
+    ring_ref_a: bytes,
+    ring_ref_c: bytes,
+    ring_ref_phe: bytes,
+    ring_ref_his: bytes,
+    ring_ref_arg: bytes,
+    ring_ref_trp: bytes,
+    range_specs: dict,
+    structure_id: str,
+) -> dict:
+    import preparic_detect_stacking
+
+    if not isinstance(range_specs, dict) or range_specs.get("schema") != 1:
+        return None
+    # Seamless passes bytes pins as Buffer instances to transformers.
+    # Unwrap their exact payloads before calling the detector.
+    ring_references = {
+        "refe-A.pdb": getattr(ring_ref_a, "content", ring_ref_a),
+        "refe-C.pdb": getattr(ring_ref_c, "content", ring_ref_c),
+        "refe-PHE.pdb": getattr(ring_ref_phe, "content", ring_ref_phe),
+        "refe-HIS.pdb": getattr(ring_ref_his, "content", ring_ref_his),
+        "refe-ARG.pdb": getattr(ring_ref_arg, "content", ring_ref_arg),
+        "refe-TRP.pdb": getattr(ring_ref_trp, "content", ring_ref_trp),
+    }
+    rows = preparic_detect_stacking._detect_stacking(range_pdbs, ring_references=ring_references)
+    return {
+        "schema": 1,
+        "echo": {
+            "structure_id": structure_id,
+            "pdbcode": range_specs.get("pdbcode"),
+            "biounit": range_specs.get("biounit"),
+            "rows": range_specs.get("rows", []),
+        },
+        "rows": rows,
+    }
+
+
+def _share_aareduce_pdbs(pdb_files: dict, range_specs: dict, exclude_pdb_code: str) -> dict:
+    if not isinstance(range_specs, dict) or not range_specs.get("rows") \
+        or not isinstance(exclude_pdb_code, str) or not exclude_pdb_code.strip():
+        return None
+    import preparic_stage4
+    return preparic_stage4._share_range_pdbs_aa(pdb_files, range_specs, exclude_pdb_code)
+
+
+def _stage4_fit_echo(rna_pdb: bytes, pdbcode: str, rna_range: dict) -> dict:
+    import preparic_stage4
+    rna_pdb = getattr(rna_pdb, "content", rna_pdb)
+    return preparic_stage4._fit_echo(rna_pdb, pdbcode, rna_range)
+
+
+def _stage4_list_fragments(
+    refe_fragments: dict, rna_pdb: bytes, pdbcode: str,
+    rna_range: dict,
+) -> dict:
+    import preparic_stage4
+    rna_pdb = getattr(rna_pdb, "content", rna_pdb)
+    return preparic_stage4._list_fragments(refe_fragments, rna_pdb, pdbcode, rna_range)
+
+
+def _stage4_reference_fragment_pdbs(refe_fragments: dict, fragments: dict) -> dict:
+    import preparic_stage4
+    return preparic_stage4._reference_fragment_pdbs(refe_fragments, fragments)
+
+
+def _stage4_parse_best_fits(best_fit: dict, fit_echo: dict) -> dict:
+    import preparic_stage4
+    return preparic_stage4._parse_best_fits(best_fit, fit_echo)
+
+
+def _stage4_validate_threshold_edits(edits: object, fragments: object) -> None:
+    import preparic_stage4
+    return preparic_stage4._validate_threshold_edits(edits, fragments)
+
+
+def _stage4_clip_fragments(
+    best_fits: dict, refe_fragments: dict, thresholds: object,
+    clip: dict, fragments: dict, selection: object, stackings: object,
+) -> dict:
+    import preparic_stage4
+    if selection is None or (type(selection) is dict and selection.get("active") is False):
+        return {}
+    candidates = preparic_stage4._selected_candidate_numbers(fragments, selection, stackings)
+    return preparic_stage4._clip_fragments(
+        best_fits, refe_fragments, thresholds, clip, fragments, candidates
+    )
+
+
 def _add_stacking_pipeline(
-    context: Context, mount_directory: Path | None = None
+    context: Context, ring_references: dict[str, Cell], mount_directory: Path | None = None
 ) -> None:
-    """Wire the pre-aareduce range PDBs into a content-bound stacking step."""
+    """Wire range PDBs and live mounted ring references into T4."""
     if mount_directory is None:
         mount_directory = MOUNT_DIRECTORY
-    context.detect_stacking = _detect_stacking
+    context.detect_stacking = _stackings_envelope
+    context.detect_stacking.modules.preparic_detect_stacking = {
+        "type": "interpreted",
+        "language": "python",
+        "code": (PROJECT_ROOT / "detect_stacking.py").read_text(encoding="utf-8"),
+    }
     context.detect_stacking.celltypes.range_pdbs = "plain"
+    context.detect_stacking.celltypes.ring_ref_a = "bytes"
+    context.detect_stacking.celltypes.ring_ref_c = "bytes"
+    context.detect_stacking.celltypes.ring_ref_phe = "bytes"
+    context.detect_stacking.celltypes.ring_ref_his = "bytes"
+    context.detect_stacking.celltypes.ring_ref_arg = "bytes"
+    context.detect_stacking.celltypes.ring_ref_trp = "bytes"
+    context.detect_stacking.celltypes.range_specs = "plain"
+    context.detect_stacking.celltypes.structure_id = "plain"
     context.detect_stacking.celltypes.result = "plain"
     context.detect_stacking.pins.range_pdbs = context.range_pdbs
+    context.detect_stacking.pins.ring_ref_a = ring_references["A"]
+    context.detect_stacking.pins.ring_ref_c = ring_references["C"]
+    context.detect_stacking.pins.ring_ref_phe = ring_references["PHE"]
+    context.detect_stacking.pins.ring_ref_his = ring_references["HIS"]
+    context.detect_stacking.pins.ring_ref_arg = ring_references["ARG"]
+    context.detect_stacking.pins.ring_ref_trp = ring_references["TRP"]
+    context.detect_stacking.pins.range_specs = context.range_specs
+    context.detect_stacking.pins.structure_id = context.structure_id_result
 
     context.stackings = Cell(celltype="plain")
     context.stackings = context.detect_stacking.result
@@ -419,6 +569,8 @@ def build_context() -> Context:
     """Build the durable project Context backing the Vite development proxy."""
     global ctx
     configure_local_execution()
+    alaric_dir = resolve_alaric_dir()
+    alaric_root = alaric_dir.parent
     if shareserver.url is None:
         configured_host = shareserver.host
         host = os.environ.get("SEAMLESS_SHARE_HOST")
@@ -453,6 +605,17 @@ def build_context() -> Context:
         context.parse_ranges.celltypes.result = "plain"
         context.range_specs = context.parse_ranges.result
 
+        context.structure_id = _structure_id
+        context.structure_id.pins.cif = context.cif
+        context.structure_id.celltypes.result = "plain"
+        context.structure_id_result = context.structure_id.result
+
+        for name in ("A", "C", "PHE", "HIS", "ARG", "TRP"):
+            attribute = f"ring_refe_{name.lower()}"
+            setattr(context, attribute, Cell(celltype="bytes"))
+            reference = getattr(context, attribute)
+            reference.mount(alaric_root / "ring-refe" / f"refe-{name}.pdb", mode="r")
+
         _mounted_decision(context, "stacking_selection", STACKING_SELECTION_PATH)
         _mounted_decision(context, "threshold_edits", THRESHOLD_EDITS_PATH)
         _mounted_decision(context, "best_fit_clip", BEST_FIT_CLIP_PATH)
@@ -465,7 +628,6 @@ def build_context() -> Context:
         context.ranges_to_pdb.pins.ranges = context.range_specs
         context.range_pdbs = Cell(celltype="plain")
         context.range_pdbs = context.ranges_to_pdb.result
-        _add_stacking_pipeline(context)
 
         context.pdbs_to_folder = _pdbs_to_folder
         context.pdbs_to_folder.celltypes.pdb_texts = "plain"
@@ -491,10 +653,157 @@ def build_context() -> Context:
         context.range_pdb_files_aa = context.aareduce_ranges.result
         context.range_pdb_files_aa.mount(PDBS_AA_PATH, mode="w")
 
-        context.structure_id = _structure_id
-        context.structure_id.pins.cif = context.cif
-        context.structure_id.celltypes.result = "plain"
-        context.structure_id_result = context.structure_id.result
+        _add_stacking_pipeline(context, {
+            "A": context.ring_refe_a,
+            "C": context.ring_refe_c,
+            "PHE": context.ring_refe_phe,
+            "HIS": context.ring_refe_his,
+            "ARG": context.ring_refe_arg,
+            "TRP": context.ring_refe_trp,
+        })
+
+        # B4/B5/B6/B7 are plain backend-only inputs shared by the Alaric steps.
+        context.rna_pdb = context.range_pdb_files_aa["range-1-aa.pdb"]
+
+        context.exclude_pdb_code = _lower_code
+        context.exclude_pdb_code.pins.pdbcode = context.pdbcode
+        context.exclude_pdb_code.celltypes.result = "text"
+
+        context.protein_pdbs = _protein_pdbs_from_aareduce
+        context.protein_pdbs.pins.pdb_files = context.range_pdb_files_aa
+        context.protein_pdbs.celltypes.pdb_files = "folder"
+        context.protein_pdbs.celltypes.result = "folder"
+
+        identities = fragment_library_identities(alaric_dir)
+        context.fraglib_identities = Cell(celltype="text")
+        context.fraglib_identities.set(json.dumps(identities, sort_keys=True, separators=(",", ":")))
+
+        context.first_rna_range = _first_rna_range
+        context.first_rna_range.pins.range_specs = context.range_specs
+        context.first_rna_range.celltypes.result = "plain"
+
+        # T6/T24 are independent of the stage-3 selection and of all fit work.
+        context.refe_fragments = refe_fragments_transformer(alaric_dir)
+        context.refe_fragments.pins.rna_pdb = context.rna_pdb
+
+        stage4_module = {
+            "type": "interpreted",
+            "language": "python",
+            "code": (PROJECT_ROOT / "stage4.py").read_text(encoding="utf-8"),
+        }
+        context.list_fragments = _stage4_list_fragments
+        context.list_fragments.modules.preparic_stage4 = stage4_module
+        context.list_fragments.pins.refe_fragments = context.refe_fragments.result
+        context.list_fragments.pins.rna_pdb = context.rna_pdb
+        context.list_fragments.pins.pdbcode = context.pdbcode
+        context.list_fragments.pins.rna_range = context.first_rna_range.result
+        context.list_fragments.celltypes.refe_fragments = "folder"
+        context.list_fragments.celltypes.rna_pdb = "bytes"
+        context.list_fragments.celltypes.pdbcode = "text"
+        context.list_fragments.celltypes.rna_range = "plain"
+        context.list_fragments.celltypes.result = "plain"
+        context.fragments = context.list_fragments.result
+
+        context.reference_fragment_pdbs_transformer = _stage4_reference_fragment_pdbs
+        context.reference_fragment_pdbs_transformer.modules.preparic_stage4 = stage4_module
+        context.reference_fragment_pdbs_transformer.pins.refe_fragments = context.refe_fragments.result
+        context.reference_fragment_pdbs_transformer.pins.fragments = context.fragments
+        context.reference_fragment_pdbs_transformer.celltypes.refe_fragments = "folder"
+        context.reference_fragment_pdbs_transformer.celltypes.fragments = "plain"
+        context.reference_fragment_pdbs_transformer.celltypes.result = "plain"
+        context.reference_fragment_pdbs = context.reference_fragment_pdbs_transformer.result
+
+        context.share_range_pdbs_aa = _share_aareduce_pdbs
+        context.share_range_pdbs_aa.modules.preparic_stage4 = stage4_module
+        context.share_range_pdbs_aa.pins.pdb_files = context.range_pdb_files_aa
+        context.share_range_pdbs_aa.pins.range_specs = context.range_specs
+        context.share_range_pdbs_aa.pins.exclude_pdb_code = context.exclude_pdb_code
+        context.share_range_pdbs_aa.celltypes.pdb_files = "folder"
+        context.share_range_pdbs_aa.celltypes.range_specs = "plain"
+        context.share_range_pdbs_aa.celltypes.exclude_pdb_code = "text"
+        context.share_range_pdbs_aa.celltypes.result = "plain"
+        context.range_pdbs_aa = context.share_range_pdbs_aa.result
+
+        # T5 is wired to a None-or-bytes gate, so it does no library work while
+        # S8 is null/inactive. Its Alaric factory keeps only project inputs as
+        # unbound pins, and its code/template inputs remain checksum-pinned.
+        context.fit_rna_pdb = _fit_input_gate
+        context.fit_rna_pdb.pins.rna_pdb = context.rna_pdb
+        context.fit_rna_pdb.pins.selection = context.stacking_selection
+        context.fit_rna_pdb.celltypes.rna_pdb = "bytes"
+        context.fit_rna_pdb.celltypes.selection = "plain"
+        context.fit_rna_pdb.celltypes.result = "bytes"
+        fraglib_config = Path.home() / ".alaric" / "fraglib.yaml"
+        fit_factory = best_fit_factory(alaric_dir)
+        context.best_fit = fit_factory.seamlessify_refe_best_fit(
+            fraglib_config=fraglib_config,
+            conda_environment="alaric",
+        )
+        context.best_fit.pins.rna_pdb = context.fit_rna_pdb.result
+        context.best_fit.pins.exclude_pdb_code = context.exclude_pdb_code
+        context.best_fit.pins.fraglib_identities = context.fraglib_identities
+
+        # T7 uses the exact T5 inputs and still runs in the Alaric environment.
+        context.best_fit_tables = best_fit_tables_transformer(alaric_dir, fraglib_config)
+        context.best_fit_tables.pins.best_fit = context.best_fit.result
+        context.best_fit_tables.pins.rna_pdb = context.rna_pdb
+        context.best_fit_tables.pins.exclude_pdb_code = context.exclude_pdb_code
+        context.best_fit_tables.pins.fraglib_identities = context.fraglib_identities
+
+        context.fit_echo = _stage4_fit_echo
+        context.fit_echo.modules.preparic_stage4 = stage4_module
+        context.fit_echo.pins.rna_pdb = context.rna_pdb
+        context.fit_echo.pins.pdbcode = context.pdbcode
+        context.fit_echo.pins.rna_range = context.first_rna_range.result
+        context.fit_echo.celltypes.rna_pdb = "bytes"
+        context.fit_echo.celltypes.pdbcode = "text"
+        context.fit_echo.celltypes.rna_range = "plain"
+        context.fit_echo.celltypes.result = "plain"
+
+        context.best_fit_thresholds_transformer = thresholds_from_tables
+        context.best_fit_thresholds_transformer.pins.tables = context.best_fit_tables.result
+        context.best_fit_thresholds_transformer.pins.fit_echo = context.fit_echo.result
+        context.best_fit_thresholds_transformer.modules.refe_thresholds, context.best_fit_thresholds_transformer.modules.threshold_rounding = threshold_module_code(alaric_dir)
+        context.best_fit_thresholds_transformer.celltypes.tables = "folder"
+        context.best_fit_thresholds_transformer.celltypes.fit_echo = "plain"
+        context.best_fit_thresholds_transformer.celltypes.result = "plain"
+        context.best_fit_thresholds = context.best_fit_thresholds_transformer.result
+
+        context.parse_best_fits = _stage4_parse_best_fits
+        context.parse_best_fits.modules.preparic_stage4 = stage4_module
+        context.parse_best_fits.pins.best_fit = context.best_fit.result
+        context.parse_best_fits.pins.fit_echo = context.fit_echo.result
+        context.parse_best_fits.celltypes.best_fit = "folder"
+        context.parse_best_fits.celltypes.fit_echo = "plain"
+        context.parse_best_fits.celltypes.result = "plain"
+        context.best_fits = context.parse_best_fits.result
+
+        context.validate_threshold_edits = _stage4_validate_threshold_edits
+        context.validate_threshold_edits.modules.preparic_stage4 = stage4_module
+        context.validate_threshold_edits.pins.edits = context.threshold_edits
+        context.validate_threshold_edits.pins.fragments = context.fragments
+        context.validate_threshold_edits.celltypes.edits = "plain"
+        context.validate_threshold_edits.celltypes.fragments = "plain"
+
+        context.clip_fragments = _stage4_clip_fragments
+        context.clip_fragments.modules.preparic_stage4 = stage4_module
+        context.clip_fragments.pins.best_fits = context.best_fits
+        context.clip_fragments.pins.refe_fragments = context.refe_fragments.result
+        context.clip_fragments.pins.thresholds = context.threshold_edits
+        context.clip_fragments.pins.clip = context.best_fit_clip
+        context.clip_fragments.pins.fragments = context.fragments
+        context.clip_fragments.pins.selection = context.stacking_selection
+        context.clip_fragments.pins.stackings = context.stackings
+        context.clip_fragments.celltypes.best_fits = "plain"
+        context.clip_fragments.celltypes.refe_fragments = "folder"
+        context.clip_fragments.celltypes.thresholds = "plain"
+        context.clip_fragments.celltypes.clip = "plain"
+        context.clip_fragments.celltypes.fragments = "plain"
+        context.clip_fragments.celltypes.selection = "plain"
+        context.clip_fragments.celltypes.stackings = "plain"
+        context.clip_fragments.celltypes.result = "folder"
+        context.clipped_fragments = context.clip_fragments.result
+        context.clipped_fragments.mount(CLIPPED_FRAGMENTS_PATH, mode="w")
 
         context.pdbcode.share(readonly=False)
         context.biounit.share(readonly=False)
@@ -502,6 +811,11 @@ def build_context() -> Context:
         context.ranges.share(readonly=False)
         context.range_specs.share(readonly=True)
         context.stackings.share()
+        context.range_pdbs_aa.share(path="range_pdbs_aa")
+        context.fragments.share(path="fragments")
+        context.reference_fragment_pdbs.share(path="reference-fragments.json")
+        context.best_fit_thresholds.share(path="best-fit-thresholds.json")
+        context.best_fits.share(path="best-fits.json")
         context.stacking_selection.share(readonly=False)
         context.threshold_edits.share(readonly=False)
         context.best_fit_clip.share(readonly=False)
@@ -509,7 +823,7 @@ def build_context() -> Context:
         context.gaussian_classes.share(readonly=False)
         context.energy_threshold_edits.share(readonly=False)
         context.structure_id_result.share(path="structure_id")
-        context.mounts.sync(timeout=10)
+        context.mounts.sync(timeout=60)
         ctx = context
         return context
     except BaseException:

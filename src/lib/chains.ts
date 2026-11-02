@@ -3,6 +3,7 @@ import type { ChainInfo, ChainKey } from './types';
 export interface ChainUnitInput extends ChainKey {
   isIdentity: boolean;
   seqIds: Iterable<number>;
+  rnaBreakAfter?: Iterable<number>;
 }
 
 /** Name copies of an asym id deterministically, retaining instanceId as identity. */
@@ -25,6 +26,7 @@ export function nameChains(units: ChainUnitInput[]): ChainInfo[] {
           : `${labelAsymId}-${index + (identityIndex >= 0 && index > identityIndex ? 0 : 1)}`;
       const seqIds = new Set([...copy.seqIds].filter(Number.isFinite));
       const sorted = [...seqIds].sort((a, b) => a - b);
+      const rnaBreakAfter = new Set([...(copy.rnaBreakAfter ?? [])].filter(Number.isSafeInteger));
       result.push({
         name,
         labelAsymId,
@@ -32,6 +34,7 @@ export function nameChains(units: ChainUnitInput[]): ChainInfo[] {
         seqIds,
         seqMin: sorted[0] ?? 0,
         seqMax: sorted.at(-1) ?? 0,
+        ...(rnaBreakAfter.size > 0 ? { rnaBreakAfter } : {}),
       });
     });
   }

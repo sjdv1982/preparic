@@ -18,6 +18,7 @@ export interface AppState {
   stackings: Stacking[];
   stackingSelection: boolean[];
   staleStackingRevision: number | null;
+  stage4OverlayKey: number | null;
 }
 
 export const appState = $state<AppState>({
@@ -37,6 +38,7 @@ export const appState = $state<AppState>({
   stackings: [],
   stackingSelection: [],
   staleStackingRevision: null,
+  stage4OverlayKey: null,
 });
 
 export function enterStage2(initialRows?: RangeRow[]): void {

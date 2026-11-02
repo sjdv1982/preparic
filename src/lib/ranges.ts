@@ -58,7 +58,7 @@ export interface ValidationIssue {
 export function validateRows(rows: RangeRow[], chains: ChainInfo[], includeEmpty = true): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const byName = new Map(chains.map(chain => [chain.name, chain]));
-  for (const row of rows) {
+  for (const [rowIndex, row] of rows.entries()) {
     const chain = byName.get(row.chain);
     if (!chain && (includeEmpty || row.chain !== '')) {
       issues.push({ rowId: row.id, column: 'chain', message: row.chain ? 'Choose a valid chain.' : 'Choose a chain.' });
@@ -78,6 +78,33 @@ export function validateRows(rows: RangeRow[], chains: ChainInfo[], includeEmpty
     if (row.start.trim() !== '' && row.end.trim() !== ''
       && Number.isInteger(start) && Number.isInteger(end) && start > end) {
       issues.push({ rowId: row.id, column: 'end', message: 'End residue must not come before the start residue.' });
+    }
+    // Range 1 is RNA. Its residue labels must cover the whole requested
+    // interval; a gap inside the interval is just as invalid as a missing
+    // endpoint. Protein ranges intentionally retain their existing behavior.
+    if (rowIndex === 0 && chain && row.start.trim() !== '' && row.end.trim() !== ''
+      && Number.isInteger(start) && Number.isInteger(end) && start <= end) {
+      const missing = [];
+      for (let resid = start; resid <= end; resid += 1) {
+        if (!chain.seqIds.has(resid)) missing.push(resid);
+      }
+      if (missing.length > 0) {
+        issues.push({
+          rowId: row.id,
+          column: 'end',
+          message: `RNA range contains unobserved residue${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}.`,
+        });
+      }
+      const breaks = [...(chain.rnaBreakAfter ?? [])]
+        .filter(resid => resid >= start && resid < end)
+        .sort((left, right) => left - right);
+      if (breaks.length > 0) {
+        issues.push({
+          rowId: row.id,
+          column: 'end',
+          message: `RNA range has a chemical chain break between residues ${breaks.map(resid => `${resid} and ${resid + 1}`).join(', ')}.`,
+        });
+      }
     }
   }
   return issues;

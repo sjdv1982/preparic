@@ -1,0 +1,16 @@
+# Deferred W3 browser acceptance
+
+These scenarios require browser MCP and are deferred under the user's instruction. The executable W3 tests exercise the pure decisions, gates, preparation, geometry and byte-preserving shares; they do not establish rendered UI behavior.
+
+- Hold T5/best-fit output pending after entering stage 3. Continue into stage 4 once S22 and S23 are fresh, type threshold values, and confirm Copy stays disabled until fresh S9 arrives. Keep the stage unchanged when results arrive.
+- In stages 4–6, compare displayed atom identities and coordinates with each byte-exact S23 range PDB. No downloaded CIF/RCSB atoms may remain. Give two range files the same internal chain ID and verify their range-index mapping. Hold back S23 after a range edit and verify the viewer shows “preparing all-atom structure…” rather than the former structure.
+- Hover a threshold row and verify reference/best-fit overlays appear on top of the prepared range PDBs. Confirm raw threshold fields are absent from the displayed table.
+- Type a threshold, invoke Copy, cancel overwrite confirmation, and confirm the typed value remains. Confirm overwrite, revert one cell, and check difference marks/count. A value above 10 Å warns; extra decimals are rejected without rounding.
+- Confirm thresholds remain editable in stages 5–6 and use the same edit cells. Confirm the clip is editable only in stage 4 and read-only in stages 5–6.
+- Retain a clip, return to stage 3, select an anchor whose candidate is clipped, and Continue. Verify the clip clamp is acknowledged before the threshold marker is activated and no candidate remains clipped.
+- In stage 1, display an assembly, then select another assembly while its Mol* structure or representation build is held pending. Disconnect the shared-state websocket before releasing that build. The read-only disconnect overlay must retain the previously visible assembly, with no blank frame or newly selected assembly appearing. Reconnect, reread the shares, and confirm the viewer shows the assembly selected by the current shared biounit. Repeat with a remote biounit change during the held build; the stale local build must never become visible. Also exercise the first assembly display after a CIF load, where the structure has been committed but assembly rendering is still pending.
+- While a new assembly build is held pending, verify that the shared biounit and local ready state still describe the visible assembly. If the build fails, both remain on that assembly and another tab sees no transient biounit change. Repeat for the first assembly after a newly downloaded CIF: hold/fail rendering after parsing, and verify no new visible structure or shared structure decision is committed until rendering succeeds.
+
+The backend graph's clip-edit execution counters and same-protein-range identity checks require integration evidence in addition to these browser scenarios. W3 source review must also verify that no clip input reaches A1–A6, fit/table/rounding work is on full RNA, and only the S8 active flag controls fit activation.
+
+The graph-versus-isolated T4 oracle must feed the isolated detector T1's exact emitted PDB strings and the same checksum-pinned six `ring-refe` files that the graph consumes. Comparing with fixture PDB bytes or a different ring-reference set cannot establish numerical parity.
