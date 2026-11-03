@@ -3,9 +3,11 @@
   import { seamlessState, setEnergyThresholdEdits, setProjectDecisionAwaited } from '../lib/seamless.svelte';
   import {
     candidateAnchors,
+    cloneStage5Decision,
     makeInteractionMatrix,
     recomputeInteractionMatrix,
     stage5CanAdvance,
+    stage5RangeIds,
     stage5Rows,
     setStage5UntilNextAnchor,
     toggleStage5MatrixCell,
@@ -16,7 +18,6 @@
     type Stage5S24,
     type Stage5Range,
   } from '../lib/stage5';
-  import { markerIsWellFormed } from '../lib/project-state';
 
   let { onBack, onContinue }: { onBack: () => Promise<boolean>; onContinue: () => Promise<boolean> } = $props();
   let matrixDraft = $state<Stage5S14 | null>(null);
@@ -31,16 +32,19 @@
 
   $effect(() => {
     const stored = seamlessState.projectSnapshot.interaction_matrix;
-    if (isRecord(stored) && stored.active === true) matrixDraft = structuredClone(stored) as Stage5S14;
+    if (isRecord(stored) && stored.active === true) matrixDraft = cloneStage5Decision(stored as Stage5S14);
   });
   $effect(() => {
     const stored = seamlessState.energyThresholdEdits;
-    if (isRecord(stored)) energyEdits = structuredClone(stored) as Stage5S24;
+    if (isRecord(stored)) energyEdits = cloneStage5Decision(stored as Stage5S24);
   });
 
   let fragments = $derived(seamlessState.computed.fragments);
   let rangeMarker = $derived(seamlessState.projectSnapshot.ranges);
   let rangeRows = $derived(isRecord(rangeMarker) && Array.isArray(rangeMarker.rows) ? rangeMarker.rows : []);
+  let matrixRanges = $derived(stage5RangeIds(rangeRows) ?? []);
+  let matrixStructureMatches = $derived(!!matrixDraft
+    && JSON.stringify(matrixDraft.ranges) === JSON.stringify(matrixRanges));
   let clip = $derived(seamlessState.projectSnapshot.best_fit_clip);
   let selection = $derived(seamlessState.projectSnapshot.stacking_selection);
   let stackings = $derived(seamlessState.computed.stackings);
@@ -55,13 +59,8 @@
   let canEdit = $derived(seamlessState.ready && seamlessState.status === 'live' && seamlessState.projectStage >= 5);
   let validatorFailed = $derived(seamlessState.stateGraphErrors.some(issue =>
     issue.name === 'validate_energy_threshold_edits' && issue.state === 'failed'));
-  let gaussianClassesValid = $derived.by(() => {
-    const marker = seamlessState.projectSnapshot.gaussian_classes;
-    if (!markerIsWellFormed('gaussian_classes', marker) || !isRecord(marker) || !Array.isArray(marker.basis)) return false;
-    const selected = isRecord(selection) && isRecord(selection.selected)
-      ? Object.keys(selection.selected).filter(key => selection.selected[key] === true).sort() : [];
-    return JSON.stringify([...marker.basis].sort()) === JSON.stringify(selected);
-  });
+  let gaussianBackendFailed = $derived(seamlessState.stateGraphErrors.some(issue =>
+    ['detect_stacking_bestfit', 'gaussian_scores_transformer'].includes(issue.name) && issue.state === 'failed'));
   let matrixError = $derived.by(() => {
     if (!matrixDraft || !rows || !anchors) return 'The current clip or selected anchors are not ready.';
     for (const anchor of anchors) {
@@ -74,7 +73,7 @@
         }
       }
     }
-    return validateStage5InteractionMatrix(matrixDraft, rows, anchors, energetics);
+    return validateStage5InteractionMatrix(matrixDraft, rows, anchors, energetics, matrixRanges);
   });
   let matrixUsable = $derived(matrixError === null && energeticsFresh);
   let diffCount = $derived.by(() => {
@@ -96,7 +95,7 @@
     bestFitsFresh: seamlessState.computedFreshness.best_fits === true,
     geometryFresh: seamlessState.computedFreshness.bestfit_stackings === true,
     gaussianFresh: seamlessState.computedFreshness.gaussian_scores === true,
-    gaussianClassesValid,
+    gaussianBackendFailed,
     validatorFailed,
     fragments,
     rangeRows,
@@ -128,7 +127,7 @@
       message = 'The shared energy-threshold table rejected this edit.';
       return;
     }
-    energyEdits = structuredClone(next);
+    energyEdits = cloneStage5Decision(next);
     message = '';
   }
 
@@ -139,7 +138,7 @@
       message = 'Enter a finite signed energy threshold with at most two decimal places.';
       return;
     }
-    const next = structuredClone(energyEdits);
+    const next = cloneStage5Decision(energyEdits);
     const entry = next.ranges.find(item => sameAddress(item.row, row));
     if (!entry) return;
     entry.values[fragment] = value;
@@ -149,7 +148,7 @@
   function revertThreshold(row: Stage5Range, fragment: string): void {
     const value = computedValue(row, fragment);
     if (!energyEdits || value === null) return;
-    const next = structuredClone(energyEdits);
+    const next = cloneStage5Decision(energyEdits);
     const entry = next.ranges.find(item => sameAddress(item.row, row));
     if (!entry) return;
     entry.values[fragment] = value;
@@ -160,7 +159,7 @@
     if (!energyEdits || !thresholdsFresh || !isRecord(computedThresholds) || !isRecord(computedThresholds.values)) return;
     const hasValues = energyEdits.ranges.some(entry => Object.values(entry.values).some(value => value !== null));
     if (hasValues && !window.confirm('Replace the current energy-threshold edits with the computed values?')) return;
-    const next = structuredClone(energyEdits);
+    const next = cloneStage5Decision(energyEdits);
     for (const entry of next.ranges) {
       const rangeId = rangeIdFor(entry.row);
       for (const fragment of Object.keys(entry.values)) {
@@ -191,10 +190,11 @@
   function isKept(key: string): boolean { return !!rows?.includes(key); }
 
   function isMatrixCellActive(range: string, fragment: string): boolean {
-    if (!matrixDraft) return false;
+    if (!matrixDraft || !matrixStructureMatches) return false;
     const row = matrixDraft.rows.indexOf(fragment);
     if (row < 0) return false;
-    return matrixDraft.ranges.some((value, column) => value === range && matrixDraft!.grid[row][column]);
+    const column = matrixDraft.ranges.indexOf(range);
+    return column >= 0 && matrixDraft.grid[row][column];
   }
 
   async function persistMatrix(next: Stage5S14): Promise<void> {
@@ -204,7 +204,7 @@
       matrixBusy = false;
       return;
     }
-    matrixDraft = structuredClone(next);
+    matrixDraft = cloneStage5Decision(next);
     message = '';
     matrixBusy = false;
   }
@@ -232,7 +232,7 @@
     if (!matrixDraft || !anchors || !energetics || !energeticsFresh) return;
     const next = toggleStage5MatrixCell(matrixDraft, row, column, anchors, energetics);
     if (!next) {
-      message = 'That cap would remove an anchor, split a run, overlap a same-range run, or include a scoring-error row.';
+      message = 'That change would remove an anchor lock, create an unanchored run, or include a scoring-error row.';
       return;
     }
     await persistMatrix(next);
@@ -307,27 +307,42 @@
   </div>
 
   <section class="stage5-matrix-section" aria-label="Interaction matrix editor">
-    <div class="stage5-matrix-heading"><div><h2>Interaction matrix</h2><p>Each anchor keeps its candidate fragments. Recompute grows each anchor over rows whose reference or best-fit energy reaches 1.</p></div>
+    <div class="stage5-matrix-heading"><div><h2>Interaction matrix</h2><p>Each protein range has one column. Selected anchors keep their candidate fragment locks in that shared column; Recompute grows runs over rows whose reference or best-fit energy reaches 1.</p></div>
       <button class="button button-secondary" onclick={recompute} disabled={matrixBusy}>Recompute</button>
     </div>
     {#if matrixError}<p class="stage5-error" role="alert">{matrixError}. Recompute when current energetics are ready.</p>{/if}
     {#if !anchors}<p class="stage5-error" role="alert">Selected anchors could not be mapped to the kept fragment rows.</p>{/if}
     <div class="stage5-matrix-wrap">
-      <table class="stage5-matrix" aria-label="Per-anchor interaction selections">
-        <thead><tr><th>Fragment</th>{#each selectedAnchors as anchor, column (`${anchor.resid}:${anchor.range}`)}
-          {@const join = matrixDraft && anchors ? untilNextAnchorState(matrixDraft, column, anchors) : null}
-          <th><span>{anchor.resid}</span><small>{anchor.range}</small>
-            {#if join?.allowed}<label class="stage5-until-next"><input type="checkbox" aria-label={`${anchor.resid} ${anchor.range} Until next anchor`}
-              checked={join.joined || join.forced} disabled={!matrixDraft || !matrixUsable || !canEdit || matrixBusy || join.forced}
-              onchange={event => void toggleUntilNextAnchor(column, event.currentTarget.checked)} />Until next anchor</label>{/if}
+      <table class="stage5-matrix" aria-label="Interaction matrix by protein range">
+        <thead><tr><th scope="col">Fragment</th>{#each matrixRanges as rangeId, column (rangeId)}
+          {@const anchorsInRange = selectedAnchors.map((anchor, anchorIndex) => ({ anchor, anchorIndex }))
+            .filter(item => item.anchor.range === rangeId)}
+          <th scope="col" aria-label={`Protein range ${rangeId}`}><strong>{rangeId}</strong>
+            {#if anchorsInRange.length === 0}<small>No selected anchor locks</small>{/if}
+            {#each anchorsInRange as item, anchorPosition (`${item.anchor.resid}:${item.anchorIndex}`)}
+              {@const anchor = item.anchor}
+              {@const join = matrixDraft && anchors ? untilNextAnchorState(matrixDraft, item.anchorIndex, anchors) : null}
+              <div class="stage5-anchor-locks">
+                <small>Anchor {anchor.resid}: {anchor.locks.map(lock => `${lock.fragment} (nt ${lock.nucleotide})`).join(', ')}</small>
+                {#if anchorPosition + 1 < anchorsInRange.length}
+                  {@const nextAnchor = anchorsInRange[anchorPosition + 1].anchor}
+                  <label class="stage5-until-next"><input type="checkbox"
+                    aria-label={`Join anchor ${anchor.resid} to anchor ${nextAnchor.resid} in ${rangeId}`}
+                    checked={join?.joined || join?.forced || false}
+                    disabled={!matrixDraft || !matrixStructureMatches || !matrixUsable || !canEdit || matrixBusy || !!join?.forced}
+                    onchange={event => void toggleUntilNextAnchor(item.anchorIndex, event.currentTarget.checked)} />Until next anchor</label>
+                {/if}
+              </div>
+            {/each}
           </th>
         {/each}</tr></thead>
         <tbody>
           {#each rows ?? [] as key, row (`${key}`)}
             {@const rowIndex = rows?.indexOf(key) ?? -1}
-            <tr><th scope="row">{key}</th>{#each selectedAnchors as anchor, column (`${anchor.resid}:${anchor.range}`)}
-              <td><input type="checkbox" aria-label={`${key} / anchor ${anchor.resid} / ${anchor.range}`} checked={matrixDraft?.grid?.[rowIndex]?.[column] ?? false}
-                disabled={!matrixDraft || !matrixUsable || !canEdit || matrixBusy}
+            <tr><th scope="row">{key}</th>{#each matrixRanges as rangeId, column (rangeId)}
+              <td><input type="checkbox" aria-label={`${key} / ${rangeId}`}
+                checked={matrixStructureMatches ? (matrixDraft?.grid?.[rowIndex]?.[column] ?? false) : false}
+                disabled={!matrixDraft || !matrixStructureMatches || !matrixUsable || !canEdit || matrixBusy}
                 onchange={() => void toggleCell(rowIndex, column)} /></td>
             {/each}</tr>
           {/each}
@@ -338,6 +353,7 @@
 
   {#if message}<p class="stage5-error" role="alert">{message}</p>{/if}
   {#if validatorFailed}<p class="stage5-error" role="alert">Energy-threshold validation failed. Correct the addressed S24 table before continuing.</p>{/if}
+  {#if gaussianBackendFailed}<p class="stage5-error" role="alert">Best-fit stacking geometry or Gaussian scoring failed. Review the stage-6 error before continuing.</p>{/if}
   <p class="stage5-gate" aria-live="polite">{#if gate.allowed}Stage 5 requirements are fresh.{:else}{gate.reasons.join(' ')}{/if}</p>
 
   <div class="stage-footer stage-footer-split">

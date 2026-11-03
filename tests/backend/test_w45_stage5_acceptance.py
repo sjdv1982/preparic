@@ -5,9 +5,11 @@ Browser-only caps/gates/write-order checks remain in that acceptance protocol.
 """
 from copy import deepcopy
 import json
+from types import SimpleNamespace
 
 import pytest
 
+import backend
 from stage5 import (
     adapt_interaction_matrix, candidate_anchors, columns_to_matrix,
     interaction_handoff, make_interaction_matrix, matrix_to_columns,
@@ -50,8 +52,8 @@ def selection_and_stackings(*addresses):
 
 def matrix(rows=None, columns=None):
     return {"schema": 1, "basis": ["a4"], "active": True,
-            "rows": list(KEYS if rows is None else rows), "ranges": list(columns or ["range-2"]),
-            "grid": [[False] * len(columns or ["range-2"]) for _ in (KEYS if rows is None else rows)]}
+            "rows": list(KEYS if rows is None else rows), "ranges": list(RANGES if columns is None else columns),
+            "grid": [[False] * len(RANGES if columns is None else columns) for _ in (KEYS if rows is None else rows)]}
 
 
 def energies(high=False):
@@ -80,13 +82,101 @@ def test_m1_exact_energy_boundary_stop_row_and_unanchored_ranges():
     assert true_rows(actual, "range-2") == KEYS[2:6]
     assert true_rows(actual, "range-3") == []
     assert true_rows(actual, "range-4") == []
-    assert validate_interaction_matrix(actual, KEYS, ["range-2"], [anchor(4)], energies()) == actual
+    assert validate_interaction_matrix(actual, KEYS, RANGES, [anchor(4)], energies()) == actual
+
+
+def test_t13_range_scorers_pin_receptors_from_the_protein_folder_result(monkeypatch, tmp_path):
+    class Folder:
+        def __init__(self, files=None):
+            self.files = files or {}
+
+        def __getitem__(self, key):
+            return self.files[key]
+
+        def __setitem__(self, key, value):
+            self.files[key] = value
+
+    class Scorer:
+        def __init__(self):
+            self.pins = SimpleNamespace()
+            self.celltypes = SimpleNamespace()
+            self.result = {"energetics.json": object()}
+
+    receptors = {f"range-{index}-aa.pdb": object() for index in (2, 3)}
+    context = SimpleNamespace(
+        range_specs=SimpleNamespace(value={"schema": 1, "rows": [RNA, *SPECS["rows"][1:3]]}),
+        energetics_ligands=SimpleNamespace(result=object()),
+        protein_pdbs=SimpleNamespace(result=Folder(receptors)),
+        energetics_range_results=Folder(),
+    )
+    scorers = []
+
+    def make_scorer(_alaric_dir):
+        scorer = Scorer()
+        scorers.append(scorer)
+        return scorer
+
+    class OnePassStop:
+        calls = 0
+
+        def wait(self, _timeout):
+            self.calls += 1
+            return self.calls > 1
+
+    monkeypatch.setattr(backend, "energetics_range_transformer", make_scorer)
+    backend._reconcile_stage5_range_scorers(context, tmp_path, OnePassStop())
+
+    assert [scorer.pins.receptor for scorer in scorers] == [receptors["range-2-aa.pdb"], receptors["range-3-aa.pdb"]]
+    assert all(scorer.pins.ligands is context.energetics_ligands.result for scorer in scorers)
+    assert set(context.energetics_range_results.files) == {"range-2.json", "range-3.json"}
+
+
+def test_t14_merge_imports_json_in_an_isolated_transformer_namespace(monkeypatch):
+    import inspect
+    import sys
+    import textwrap
+    import stage5 as preparic_stage5
+
+    monkeypatch.setitem(sys.modules, "preparic_stage5", preparic_stage5)
+    namespace = {}
+    source = textwrap.dedent(inspect.getsource(backend._stage5_merge_energetics))
+    exec(source, namespace)
+    merge = namespace["_stage5_merge_energetics"]
+    assert "json" not in merge.__globals__
+
+    energy_result = {
+        "schema": 1,
+        "receptor": {"beads": 4},
+        "pairs": [
+            {"ligand": "frag-1-GU-refe.pdb", "energy": -1.0, "error": None},
+            {"ligand": "frag-1-GU-bestfit.pdb", "energy": -2.0, "error": None},
+        ],
+    }
+    result = merge(
+        {"range-2.json": json.dumps(energy_result).encode("utf-8")},
+        {"schema": 1, "rows": [RNA, SPECS["rows"][1]]},
+        {"echo": {"fit": "current"}},
+        {"schema": 1, "fragments": [{"key": "frag-1-GU"}]},
+    )
+
+    assert result["ranges"][0]["rows"] == [{
+        "key": "frag-1-GU",
+        "reference": {"energy": -1.0, "error": None},
+        "bestfit": {"energy": -2.0, "error": None},
+    }]
+
+
+def test_t15_is_a_sentinel_until_s14_is_active():
+    inactive = matrix()
+    inactive["active"] = False
+    assert interaction_handoff(None, None, None, None, None, None) is None
+    assert interaction_handoff(inactive, None, None, None, None, None) is None
 
 
 def test_m2_independent_ranges_can_overlap():
     anchors = [anchor(4), anchor(5, "range-3")]
-    actual = recompute_interaction_matrix(matrix(columns=["range-2", "range-3"]), anchors, energies())
-    assert actual["ranges"] == ["range-2", "range-3"]
+    actual = recompute_interaction_matrix(matrix(), anchors, energies())
+    assert actual["ranges"] == RANGES
     assert true_rows(actual, "range-2") == KEYS[2:6]
     assert true_rows(actual, "range-3") == [KEYS[4]]
 
@@ -105,21 +195,41 @@ def test_m2_candidate_collapse_keeps_original_stacking_keys_and_mapped_nucleotid
     # Equal residue/range anchors collapse, distinct residue/range anchors do not.
     selected_before = deepcopy(selected)
     empty = make_interaction_matrix(frags, {"clip1": 0, "clip2": 0}, SPECS, selected, stacks)
-    assert empty["ranges"] == ["range-2", "range-3"]
+    assert empty["ranges"] == RANGES
     assert empty["basis"] == sorted(selected["selected"])
     assert selected == selected_before  # Original Gaussian job identities survive.
     with pytest.raises(ValueError, match="clipped|unmapped"):
         candidate_anchors(frags, selected, stacks, KEYS[4:])
 
 
-def test_anchor_columns_are_sorted_along_rna_and_repeat_protein_ranges():
+def test_s14_multi_anchor_per_range_uses_one_column_and_keeps_each_lock_in_runs():
+    anchors = [anchor(3, "range-2"), anchor(8, "range-2"),
+               anchor(4, "range-3"), anchor(8, "range-3")]
+    value = matrix()
+    value["basis"] = [f"stack-{index}" for index in range(4)]
+    # Two separated runs for each range, with one selected anchor lock in each.
+    value["grid"][2][0] = value["grid"][7][0] = True
+    value["grid"][3][1] = value["grid"][7][1] = True
+    assert value["ranges"] == RANGES
+    assert all(len(row) == len(RANGES) for row in value["grid"])
+    assert validate_interaction_matrix(value, KEYS, RANGES, anchors, energies(high=True)) == value
+    columns = matrix_to_columns(value, anchors)
+    assert [column["range"] for column in columns] == RANGES
+    assert len(columns[0]["runs"]) == 2
+    assert len(columns[1]["runs"]) == 2
+    assert columns[2]["runs"] == []
+    assert columns_to_matrix(columns, KEYS, RANGES, value["basis"]) == value
+
+
+def test_anchor_locks_keep_unique_protein_range_columns_and_repeat_anchor_ranges():
     frags = fragments()
     selected, stacks = selection_and_stackings((115, 2, 8), (107, 3, 9), (105, 2, 10), (105, 2, 11))
     actual = make_interaction_matrix(frags, {"clip1": 0, "clip2": 0}, SPECS, selected, stacks)
-    assert actual["ranges"] == ["range-2", "range-3", "range-2"]
+    assert actual["ranges"] == RANGES
     assert len(actual["grid"]) == 9
     assert all(row == [False, False, False] for row in actual["grid"])
     assert len(actual["basis"]) == 4  # four original Gaussian anchors, three matrix anchors
+    assert len(actual["ranges"]) == len(set(actual["ranges"]))
     anchors = candidate_anchors(frags, selected, stacks, KEYS)
     assert [item["resid"] for item in anchors] == [105, 107, 115]
     assert [len(item["stackings"]) for item in anchors] == [2, 1, 1]
@@ -128,20 +238,22 @@ def test_anchor_columns_are_sorted_along_rna_and_repeat_protein_ranges():
 @pytest.mark.parametrize("left,right", [([3, 4], [5, 6]), ([3, 4], [4, 5])])
 def test_m3_touching_or_overlapping_locks_form_one_run(left, right):
     anchors = [anchor(3, locks=left), anchor(5, locks=right)]
-    result = recompute_interaction_matrix(matrix(columns=["range-2", "range-2"]), anchors, energies(high=True))
-    assert result["ranges"] == ["range-2", "range-2"]
-    assert all(len(row) == 2 for row in result["grid"])
+    result = recompute_interaction_matrix(matrix(), anchors, energies(high=True))
+    assert result["ranges"] == RANGES
+    assert all(len(row) == len(RANGES) for row in result["grid"])
     columns = matrix_to_columns(result, anchors)
-    assert len(columns) == 2  # k joined anchors read back as k columns
-    assert [column["range"] for column in columns] == ["range-2", "range-2"]
+    assert len(columns) == len(RANGES)
+    assert [column["range"] for column in columns] == RANGES
+    assert {(lock["fragment"], lock["nucleotide"]) for lock in columns[0]["runs"][0]["anchors"]} \
+        == {(KEYS[index - 1], 1) for index in set(left + right)}
     assert true_rows(result, "range-2") == KEYS
     assert columns_to_matrix(columns, KEYS, result["ranges"], result["basis"]) == result
 
 
 def test_m4_roundtrip_separated_joined_and_cross_range_runs():
-    # Columns follow RNA anchor order; a range can occur more than once.
+    # Multiple runs in range-2 share one column, alongside the range-3 column.
     anchors = [anchor(3), anchor(4, "range-3"), anchor(8)]
-    column_ranges = ["range-2", "range-3", "range-2"]
+    column_ranges = RANGES
     value = matrix(columns=column_ranges)
     for n in (2, 3, 4):
         value["grid"][n - 1][0] = True
@@ -150,8 +262,8 @@ def test_m4_roundtrip_separated_joined_and_cross_range_runs():
     for n in (7, 8):
         value["grid"][n - 1][2] = True
     columns = matrix_to_columns(value, anchors)
-    assert len(columns) == 3
-    assert [column["range"] for column in columns] == column_ranges
+    assert len(columns) == len(RANGES)
+    assert [column["range"] for column in columns] == RANGES
     assert value["ranges"] == column_ranges
     assert columns_to_matrix(columns, KEYS, column_ranges, value["basis"]) == value
 
@@ -161,7 +273,7 @@ def test_m4_roundtrip_separated_joined_and_cross_range_runs():
     "lock", "unanchored-run", "true-error"])
 def test_m5_each_corrupted_read_is_refused_without_mutation(case):
     anchors, energy = [anchor(4), anchor(5, "range-3")], energies()
-    value = recompute_interaction_matrix(matrix(columns=["range-2", "range-3"]), anchors, energy)
+    value = recompute_interaction_matrix(matrix(), anchors, energy)
     if case == "row-count": value["grid"].pop()
     elif case == "ragged": value["grid"][0].pop()
     elif case in ("int-zero", "int-one", "null", "string"):
@@ -176,7 +288,7 @@ def test_m5_each_corrupted_read_is_refused_without_mutation(case):
     elif case == "true-error": value["grid"][6][0] = True
     before = deepcopy(value)
     with pytest.raises(ValueError):
-        validate_interaction_matrix(value, KEYS, ["range-2", "range-3"], anchors, energy)
+        validate_interaction_matrix(value, KEYS, RANGES, anchors, energy)
     assert value == before
 
 
@@ -191,12 +303,12 @@ def test_m5_error_at_anchor_lock_names_anchor_and_never_drops_it():
 def test_m5_opposite_end_clip_with_same_count_is_refused():
     value = matrix(KEYS[1:])
     with pytest.raises(ValueError, match="extent|order"):
-        validate_interaction_matrix(value, KEYS[:-1], ["range-2"], [], energies())
+        validate_interaction_matrix(value, KEYS[:-1], RANGES, [], energies())
 
 
 @pytest.mark.parametrize("stop", [None, "low", "error"])
 def test_m6_only_boundary_touching_outer_ends_regrow(stop):
-    old = matrix(KEYS[2:7], columns=["range-2", "range-3"])
+    old = matrix(KEYS[2:7])
     for row in old["grid"]:
         row[0] = True
     for row in old["grid"][1:-1]:
@@ -212,7 +324,7 @@ def test_m6_only_boundary_touching_outer_ends_regrow(stop):
     assert true_rows(actual, "range-2") == (KEYS if stop is None else KEYS[2:])
     assert true_rows(actual, "range-3") == KEYS[3:6]
     assert actual["grid"][2:7] == old["grid"]
-    validate_interaction_matrix(actual, KEYS, ["range-2", "range-3"], anchors, energy)
+    validate_interaction_matrix(actual, KEYS, RANGES, anchors, energy)
     assert adapt_interaction_matrix(actual, KEYS[2:7], anchors, energy) == old
     assert adapt_interaction_matrix(old, old["rows"], anchors, energy) == old
     with pytest.raises(ValueError, match="lock|anchor"):
@@ -220,7 +332,7 @@ def test_m6_only_boundary_touching_outer_ends_regrow(stop):
 
 
 def test_m6_adapts_shifted_extent_and_keeps_the_inner_caps():
-    old = matrix(KEYS[2:7], columns=["range-2", "range-3"])
+    old = matrix(KEYS[2:7])
     for index, row in enumerate(old["grid"]):
         row[0] = index < 4  # the 3' cap stopped short of the old boundary
         row[1] = index > 0  # the 5' cap stopped short; the 3' end touched the boundary
@@ -233,7 +345,16 @@ def test_m6_adapts_shifted_extent_and_keeps_the_inner_caps():
     assert [row[0] for row in shifted["grid"]] == [True, True, True, True, True]
     assert [row[1] for row in shifted["grid"]] == [False, False, True, True, True]
     assert shifted["grid"][2:5] == inner
-    validate_interaction_matrix(shifted, shifted_rows, ["range-2", "range-3"], anchors, energy)
+    validate_interaction_matrix(shifted, shifted_rows, RANGES, anchors, energy)
+
+
+def test_m6_refuses_legacy_duplicate_anchor_columns_without_normalizing():
+    old = matrix(KEYS[2:7], columns=["range-2", "range-2"])
+    anchors = [anchor(4), anchor(5)]
+    before = deepcopy(old)
+    with pytest.raises(ValueError, match="grid|range"):
+        adapt_interaction_matrix(old, old["rows"], anchors, energies(high=True))
+    assert old == before
 
 
 def test_handoff_contains_only_kept_rows_and_actual_candidate_anchors():
@@ -242,7 +363,7 @@ def test_handoff_contains_only_kept_rows_and_actual_candidate_anchors():
     clip = {"clip1": 1, "clip2": 1}
     value = make_interaction_matrix(frags, clip, SPECS, selected, stacks)
     anchors = candidate_anchors(frags, selected, stacks, value["rows"])
-    assert value["ranges"] == ["range-2"]
+    assert value["ranges"] == RANGES
     value = recompute_interaction_matrix(value, anchors, energies())
     actual = interaction_handoff(value, frags, selected, stacks, clip, SPECS)
     assert actual == {

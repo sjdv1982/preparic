@@ -213,7 +213,7 @@ def make_interaction_matrix(
     selection: object,
     stackings: object,
 ) -> dict:
-    """Build the empty S14 matrix with one ordered column per collapsed anchor."""
+    """Build the empty S14 matrix with one ordered column per protein range."""
     fragment_rows = _fragment_rows(fragments)
     protein_rows = _protein_rows(range_specs)
     if type(clip) is not dict or type(clip.get("clip1")) is not int \
@@ -227,7 +227,9 @@ def make_interaction_matrix(
     kept_rows = all_rows[clip["clip1"]:len(all_rows) - clip["clip2"]]
     basis = sorted(key for key, selected in selection["selected"].items() if selected)
     anchors = candidate_anchors(fragments, selection, stackings, kept_rows)
-    ranges = [anchor["range"] for anchor in anchors]
+    ranges = [f"range-{index}" for index in range(2, len(protein_rows) + 2)]
+    if any(anchor["range"] not in ranges for anchor in anchors):
+        raise ValueError("A selected anchor refers to a protein range outside the current range table.")
     return {
         "schema": 1,
         "basis": basis,
@@ -325,7 +327,7 @@ def candidate_anchors(fragments: object, selection: object, stackings: object, m
 
 
 def recompute_interaction_matrix(matrix: object, anchors: list[dict], energetics: object) -> dict:
-    """P5.4: rebuild one column per anchor, joining touching same-range runs."""
+    """P5.4: rebuild one column per protein range while retaining every anchor lock."""
     if type(matrix) is not dict or matrix.get("schema") != 1 \
         or not isinstance(matrix.get("rows"), list) or not isinstance(matrix.get("ranges"), list):
         raise ValueError("The interaction matrix is malformed.")
@@ -334,59 +336,48 @@ def recompute_interaction_matrix(matrix: object, anchors: list[dict], energetics
         raise ValueError("Fresh energetics are not ready.")
     rows = matrix["rows"]
     ranges = matrix["ranges"]
-    if not rows or not ranges or len(matrix.get("grid", [])) != len(rows):
+    if not rows or not ranges or any(type(range_id) is not str or not range_id for range_id in ranges) \
+        or len(set(ranges)) != len(ranges) or len(matrix.get("grid", [])) != len(rows):
         raise ValueError("The interaction matrix has an invalid extent.")
+    if any(type(row) is not list or len(row) != len(ranges) or any(type(cell) is not bool for cell in row)
+           for row in matrix["grid"]):
+        raise ValueError("The interaction matrix has an invalid grid.")
     energy_by_range = _energy_index(energetics)
     row_positions = {key: index for index, key in enumerate(rows)}
     grid = [[False for _ in ranges] for _ in rows]
-    if len(anchors) != len(ranges) or [anchor.get("range") for anchor in anchors] != ranges:
-        raise ValueError("S14 columns do not match the ordered selected anchors.")
-
-    by_range: dict[str, list[tuple[int, int, int]]] = {}
-    for column, (range_id, anchor) in enumerate(zip(ranges, anchors)):
-        locks = {row_positions[lock["fragment"]] for lock in anchor.get("locks", [])
-                 if lock.get("fragment") in row_positions}
-        if not locks:
+    if any(anchor.get("range") not in ranges for anchor in anchors):
+        raise ValueError("A selected anchor refers to an unknown S14 protein range.")
+    locks_by_range: dict[str, set[int]] = {range_id: set() for range_id in ranges}
+    positions_by_anchor: list[set[int]] = []
+    for anchor in anchors:
+        range_id = anchor["range"]
+        raw_locks = [lock.get("fragment") for lock in anchor.get("locks", [])]
+        if not raw_locks or any(fragment not in row_positions for fragment in raw_locks):
             raise ValueError(f"Selected anchor {anchor.get('resid')} / {range_id} has no kept lock.")
+        locks = {row_positions[fragment] for fragment in raw_locks}
+        positions_by_anchor.append(locks)
+        locks_by_range[range_id].update(locks)
+
+    for anchor, locks in zip(anchors, positions_by_anchor):
+        range_id = anchor["range"]
         for position in locks:
             if not _has_energy(energy_by_range.get(range_id, {}).get(rows[position])):
                 raise ValueError(f"Selected anchor {anchor['resid']} / {range_id} has a scoring error at {rows[position]}.")
-        by_range.setdefault(range_id, []).append((column, min(locks), max(locks)))
-
-    for range_id, range_anchors in by_range.items():
-        for anchor_index, (column, _first_lock, _last_lock) in enumerate(range_anchors):
-            anchor = anchors[column]
-            locks = {row_positions[lock["fragment"]] for lock in anchor["locks"]}
-            left, right = min(locks), max(locks)
-            other_locks = {position for other_column, _, _ in range_anchors if other_column != column
-                           for position in (row_positions[lock["fragment"]]
-                                            for lock in anchors[other_column]["locks"])}
-            while left > 0:
-                candidate = left - 1
-                if candidate in other_locks or not _grows(energy_by_range.get(range_id, {}).get(rows[candidate])):
-                    break
-                left = candidate
-            while right + 1 < len(rows):
-                candidate = right + 1
-                if candidate in other_locks or not _grows(energy_by_range.get(range_id, {}).get(rows[candidate])):
-                    break
-                right = candidate
-            range_anchors[anchor_index] = (column, left, right)
-
-        # Same-range intervals that touch or overlap form one joined run. Every
-        # anchor column in that joined run carries the same addressed cells.
-        components: list[list[tuple[int, int, int]]] = []
-        for item in sorted(range_anchors, key=lambda value: (value[1], value[2], value[0])):
-            if components and item[1] <= components[-1][-1][2] + 1:
-                components[-1].append(item)
-            else:
-                components.append([item])
-        for component in components:
-            left = min(item[1] for item in component)
-            right = max(item[2] for item in component)
-            for column, _, _ in component:
-                for position in range(left, right + 1):
-                    grid[position][column] = True
+        left, right = min(locks), max(locks)
+        other_locks = locks_by_range[range_id] - locks
+        while left > 0:
+            candidate = left - 1
+            if candidate in other_locks or not _grows(energy_by_range.get(range_id, {}).get(rows[candidate])):
+                break
+            left = candidate
+        while right + 1 < len(rows):
+            candidate = right + 1
+            if candidate in other_locks or not _grows(energy_by_range.get(range_id, {}).get(rows[candidate])):
+                break
+            right = candidate
+        column = ranges.index(range_id)
+        for position in range(left, right + 1):
+            grid[position][column] = True
     result = dict(matrix)
     result["grid"] = grid
     return result
@@ -436,7 +427,7 @@ def validate_interaction_matrix(
     *,
     require_active: bool = True,
 ) -> dict:
-    """Strict T15 read validation for addressed rows, anchor columns and runs."""
+    """Strict addressed-matrix validation for range columns, anchor locks, and runs."""
     if type(matrix) is not dict or set(matrix) != {"schema", "basis", "active", "rows", "ranges", "grid"}:
         raise ValueError("S14 schema check failed.")
     if type(matrix.get("schema")) is not int or matrix["schema"] != 1:
@@ -448,9 +439,11 @@ def validate_interaction_matrix(
         raise ValueError("S14 selection basis check failed.")
     if matrix.get("rows") != rows:
         raise ValueError("S14 addressed-row order or clip extent check failed.")
-    expected_ranges = [anchor.get("range") for anchor in anchors]
-    if matrix.get("ranges") != ranges or ranges != expected_ranges:
-        raise ValueError("S14 ordered anchor-column check failed.")
+    if any(type(range_id) is not str or not range_id for range_id in ranges) \
+        or len(set(ranges)) != len(ranges) or matrix.get("ranges") != ranges:
+        raise ValueError("S14 ordered protein-range check failed.")
+    if any(anchor.get("range") not in ranges for anchor in anchors):
+        raise ValueError("S14 selected anchor refers to an unknown protein range.")
     grid = matrix.get("grid")
     if not isinstance(grid, list) or len(grid) != len(rows):
         raise ValueError("S14 row-count check failed.")
@@ -461,11 +454,14 @@ def validate_interaction_matrix(
             raise ValueError("S14 boolean-cell check failed.")
     energy_by_range = _energy_index(energetics)
     row_position = {key: index for index, key in enumerate(rows)}
-    intervals_by_range: dict[str, list[tuple[int, int, int]]] = {}
-    for column, anchor in enumerate(anchors):
+    anchors_by_range: dict[str, list[dict]] = {range_id: [] for range_id in ranges}
+    for anchor in anchors:
         range_id = anchor.get("range")
         if not isinstance(range_id, str):
             raise ValueError(f"S14 lock check failed for anchor {anchor.get('resid')} in {range_id}.")
+        if range_id not in anchors_by_range:
+            raise ValueError(f"S14 anchor {anchor.get('resid')} refers to unknown range {range_id}.")
+        column = ranges.index(range_id)
         locks_by_column: set[int] = set()
         for lock in anchor.get("locks", []):
             fragment = lock.get("fragment")
@@ -477,8 +473,12 @@ def validate_interaction_matrix(
             locks_by_column.add(index)
         if not locks_by_column:
             raise ValueError(f"S14 anchor {anchor.get('resid')} / {range_id} has no lock.")
+        anchors_by_range[range_id].append(anchor)
+    for column, range_id in enumerate(ranges):
+        lock_positions = {row_position[lock["fragment"]]
+                          for anchor in anchors_by_range[range_id]
+                          for lock in anchor.get("locks", []) if lock.get("fragment") in row_position}
         index = 0
-        intervals = []
         while index < len(rows):
             if not grid[index][column]:
                 index += 1
@@ -487,22 +487,12 @@ def validate_interaction_matrix(
             while index + 1 < len(rows) and grid[index + 1][column]:
                 index += 1
             last = index
-            if not any(first <= lock <= last for lock in locks_by_column):
+            if not any(first <= lock <= last for lock in lock_positions):
                 raise ValueError(f"S14 true run {rows[first]}–{rows[last]} in {range_id} has no selected anchor.")
             for fragment in rows[first:last + 1]:
                 if not _has_energy(energy_by_range.get(range_id, {}).get(fragment)):
                     raise ValueError(f"S14 selects {fragment} in {range_id}, which has a scoring error.")
-            intervals.append((column, first, last))
             index += 1
-        if len(intervals) > 1:
-            raise ValueError(f"S14 anchor column {column} contains more than one run.")
-        intervals_by_range.setdefault(range_id, []).extend(intervals)
-    for range_id, intervals in intervals_by_range.items():
-        ordered = sorted(intervals, key=lambda item: (item[1], item[2], item[0]))
-        for left, right in zip(ordered, ordered[1:]):
-            if right[1] <= left[2] + 1:
-                if (left[1], left[2]) != (right[1], right[2]):
-                    raise ValueError(f"S14 same-range anchors in {range_id} that touch or overlap must share a joined run.")
     return matrix
 
 
@@ -531,7 +521,8 @@ def validate_interaction_matrix_structure(
         raise ValueError("S14 selection basis check failed.")
     if matrix.get("rows") != rows:
         raise ValueError("S14 addressed-row order or clip extent check failed.")
-    if matrix.get("ranges") != ranges:
+    if any(type(range_id) is not str or not range_id for range_id in ranges) \
+        or len(set(ranges)) != len(ranges) or matrix.get("ranges") != ranges:
         raise ValueError("S14 ordered range check failed.")
     grid = matrix.get("grid")
     if not isinstance(grid, list) or len(grid) != len(rows):
@@ -545,7 +536,7 @@ def validate_interaction_matrix_structure(
 
 
 def matrix_to_columns(matrix: object, anchors: list[dict]) -> list[dict]:
-    """Serialize one contiguous column per selected anchor."""
+    """Serialize the addressed runs once per protein range, retaining all run locks."""
     if type(matrix) is not dict or not isinstance(matrix.get("rows"), list) \
         or not isinstance(matrix.get("ranges"), list) or not isinstance(matrix.get("grid"), list):
         raise ValueError("The interaction matrix is malformed.")
@@ -553,10 +544,12 @@ def matrix_to_columns(matrix: object, anchors: list[dict]) -> list[dict]:
     if len(grid) != len(rows) or any(type(row) is not list or len(row) != len(ranges)
                                      or any(type(cell) is not bool for cell in row) for row in grid):
         raise ValueError("The interaction matrix is not a rectangular boolean grid.")
+    if any(type(range_id) is not str or not range_id for range_id in ranges) \
+        or len(set(ranges)) != len(ranges) or any(anchor.get("range") not in ranges for anchor in anchors):
+        raise ValueError("S14 columns do not match the ordered protein ranges.")
     columns = []
-    if len(anchors) != len(ranges) or [anchor.get("range") for anchor in anchors] != ranges:
-        raise ValueError("S14 columns do not match the ordered selected anchors.")
-    for column, (range_id, anchor) in enumerate(zip(ranges, anchors)):
+    for range_id in ranges:
+        column = ranges.index(range_id)
         runs = []
         position = 0
         while position < len(rows):
@@ -568,11 +561,14 @@ def matrix_to_columns(matrix: object, anchors: list[dict]) -> list[dict]:
                 position += 1
             last = position
             run_anchors = []
-            for lock in anchor.get("locks", []):
-                if first <= rows.index(lock["fragment"]) <= last:
-                    item = {"fragment": lock["fragment"], "nucleotide": lock["nucleotide"]}
-                    if item not in run_anchors:
-                        run_anchors.append(item)
+            for anchor in anchors:
+                if anchor.get("range") != range_id:
+                    continue
+                for lock in anchor.get("locks", []):
+                    if first <= rows.index(lock["fragment"]) <= last:
+                        item = {"fragment": lock["fragment"], "nucleotide": lock["nucleotide"]}
+                        if item not in run_anchors:
+                            run_anchors.append(item)
             runs.append({
                 "first": rows[first],
                 "last": rows[last],
@@ -590,7 +586,8 @@ def columns_to_matrix(
     """Restore the addressed boolean grid from matrix column runs."""
     if not isinstance(columns, list) or len(set(rows)) != len(rows):
         raise ValueError("Addressed matrix rows must be a unique list.")
-    if len(columns) != len(ranges) or any(
+    if any(type(range_id) is not str or not range_id for range_id in ranges) \
+        or len(set(ranges)) != len(ranges) or len(columns) != len(ranges) or any(
         type(column) is not dict or column.get("range") != ranges[index]
         or not isinstance(column.get("runs"), list)
         for index, column in enumerate(columns)
@@ -630,14 +627,16 @@ def adapt_interaction_matrix(
     old_rows, ranges, old_grid = matrix["rows"], matrix["ranges"], matrix["grid"]
     if not isinstance(new_rows, list) or not new_rows or len(set(new_rows)) != len(new_rows):
         raise ValueError("The new clip has an invalid row extent; recompute the matrix.")
-    if len(old_grid) != len(old_rows) or any(type(row) is not list or len(row) != len(ranges)
+    if any(type(range_id) is not str or not range_id for range_id in ranges) \
+        or len(set(ranges)) != len(ranges) or len(old_grid) != len(old_rows) or any(type(row) is not list or len(row) != len(ranges)
                                              or any(type(cell) is not bool for cell in row) for row in old_grid):
         raise ValueError("The existing interaction matrix has an invalid grid; recompute it.")
     new_position = {key: index for index, key in enumerate(new_rows)}
     if any(lock["fragment"] not in new_position for anchor in anchors for lock in anchor.get("locks", [])):
         raise ValueError("The new clip removes a selected anchor lock; return to stage 3.")
-    if len(anchors) != len(ranges) or [anchor.get("range") for anchor in anchors] != ranges:
-        raise ValueError("The selected anchor columns changed; recompute the matrix.")
+    if any(type(range_id) is not str or not range_id for range_id in ranges) \
+        or len(set(ranges)) != len(ranges) or any(anchor.get("range") not in ranges for anchor in anchors):
+        raise ValueError("The selected protein-range columns changed; recompute the matrix.")
     old_positions = [new_position[key] for key in old_rows if key in new_position]
     if not old_positions or old_positions != list(range(old_positions[0], old_positions[-1] + 1)):
         raise ValueError("The new clip changed fragment order; recompute the matrix.")
@@ -663,28 +662,6 @@ def adapt_interaction_matrix(
                 while position < len(new_rows) and _grows(energy_by_range.get(range_id, {}).get(new_rows[position])):
                     grid[position][column] = True
                     position += 1
-    columns_by_range: dict[str, list[int]] = {}
-    for column, range_id in enumerate(ranges):
-        columns_by_range.setdefault(range_id, []).append(column)
-    for columns in columns_by_range.values():
-        intervals = []
-        for column in columns:
-            occupied = [index for index, row in enumerate(grid) if row[column]]
-            if occupied:
-                intervals.append({"columns": [column], "first": occupied[0], "last": occupied[-1]})
-        components = []
-        for interval in sorted(intervals, key=lambda item: (item["first"], item["last"])):
-            if components and interval["first"] <= components[-1]["last"] + 1:
-                components[-1]["last"] = max(components[-1]["last"], interval["last"])
-                components[-1]["columns"].extend(interval["columns"])
-            else:
-                components.append(interval)
-        for component in components:
-            if len(component["columns"]) < 2:
-                continue
-            for column in component["columns"]:
-                for index in range(component["first"], component["last"] + 1):
-                    grid[index][column] = True
     result = dict(matrix)
     result["rows"] = list(new_rows)
     result["grid"] = grid
@@ -698,8 +675,12 @@ def interaction_handoff(
     stackings: object,
     clip: object,
     range_specs: object,
-) -> dict:
+) -> dict | None:
     """T15: validate the addressed matrix and build `interactions.json`."""
+    # S14 is not in force during stages 3–4. ST §4.3–4.4 defines an inactive
+    # marker as null for its consumers, so T15 must remain a sentinel then.
+    if matrix is None or (type(matrix) is dict and matrix.get("active") is False):
+        return None
     all_fragments = _fragment_rows(fragments)
     protein_rows = _protein_rows(range_specs)
     if type(clip) is not dict or type(clip.get("clip1")) is not int or type(clip.get("clip2")) is not int:
@@ -708,18 +689,17 @@ def interaction_handoff(
     kept_rows = all_fragments[start:stop]
     expected_rows = [row["key"] for row in kept_rows]
     anchors = candidate_anchors(fragments, selection, stackings, expected_rows)
-    expected_ranges = [anchor["range"] for anchor in anchors]
+    unique_ranges = [f"range-{index}" for index in range(2, len(protein_rows) + 2)]
+    expected_ranges = unique_ranges
     validate_interaction_matrix_structure(matrix, expected_rows, expected_ranges)
     grid = matrix["grid"]
     row_positions = {key: index for index, key in enumerate(expected_rows)}
-    unique_ranges = [f"range-{index}" for index in range(2, len(protein_rows) + 2)]
     anchors_by_range: dict[str, list[dict]] = {range_id: [] for range_id in unique_ranges}
-    columns_by_range: dict[str, list[int]] = {range_id: [] for range_id in unique_ranges}
-    for column, anchor in enumerate(anchors):
+    columns_by_range: dict[str, list[int]] = {range_id: [column] for column, range_id in enumerate(unique_ranges)}
+    for anchor in anchors:
         if anchor["range"] not in anchors_by_range:
             raise ValueError(f"Selected anchor refers to unknown {anchor['range']}.")
         anchors_by_range[anchor["range"]].append(anchor)
-        columns_by_range[anchor["range"]].append(column)
 
     runs = []
     interactions: dict[str, list[str]] = {}
@@ -727,7 +707,7 @@ def interaction_handoff(
         columns = columns_by_range[range_id]
         position = 0
         while position < len(expected_rows):
-            if not columns or not any(grid[position][column] for column in columns):
+            if not any(grid[position][column] for column in columns):
                 position += 1
                 continue
             first = position

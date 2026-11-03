@@ -21,6 +21,11 @@ export interface Stage5Anchor {
   locks: Array<{ fragment: string; nucleotide: number }>;
 }
 
+/** Copy a JSON decision marker while removing reactive proxies from its object graph. */
+export function cloneStage5Decision<T extends Stage5S14 | Stage5S24>(marker: T): T {
+  return JSON.parse(JSON.stringify(marker)) as T;
+}
+
 type RecordValue = Record<string, any>;
 
 function isRecord(value: unknown): value is RecordValue {
@@ -120,7 +125,7 @@ export function makeInteractionMatrix(
   const anchors = rows && basis ? candidateAnchors(fragments, selection, stackings, rows) : null;
   if (!rows || !proteinRanges || !basis || !anchors) return null;
   if (anchors.some(anchor => !proteinRanges.includes(anchor.range))) return null;
-  const ranges = anchors.map(anchor => anchor.range);
+  const ranges = proteinRanges;
   return {
     schema: 1,
     basis,
@@ -177,6 +182,7 @@ export function validateStage5MatrixRead(
   expectedRows: readonly string[],
   expectedRanges: readonly string[],
 ): string | null {
+  if (new Set(expectedRanges).size !== expectedRanges.length) return 'protein range order contains duplicates';
   if (!isRecord(value) || Object.keys(value).length !== 6
     || !['schema', 'basis', 'active', 'rows', 'ranges', 'grid'].every(key => Object.hasOwn(value, key))) {
     return 'schema check failed';
@@ -201,16 +207,21 @@ export function validateStage5InteractionMatrix(
   expectedRows: readonly string[],
   anchors: readonly Stage5Anchor[],
   energetics: unknown,
+  expectedRanges?: readonly string[],
 ): string | null {
-  const expectedRanges = anchors.map(anchor => anchor.range);
-  const shapeError = validateStage5MatrixRead(matrix, expectedRows, expectedRanges);
+  const ranges = expectedRanges ?? (isRecord(matrix) && Array.isArray(matrix.ranges)
+    ? matrix.ranges as string[] : [...new Set(anchors.map(anchor => anchor.range))]);
+  const shapeError = validateStage5MatrixRead(matrix, expectedRows, ranges);
   if (shapeError) return shapeError;
   if (!isRecord(matrix) || !Array.isArray(matrix.grid)) return 'matrix structure is invalid';
   const rows = matrix.rows as string[];
+  const matrixRanges = matrix.ranges as string[];
   const grid = matrix.grid as boolean[][];
   const rowIndex = new Map(rows.map((key, index) => [key, index]));
-  const intervals = new Map<string, Array<{ column: number; first: number; last: number }>>();
-  for (const [column, anchor] of anchors.entries()) {
+  const anchorsByRange = new Map<string, Stage5Anchor[]>();
+  for (const anchor of anchors) {
+    const column = matrixRanges.indexOf(anchor.range);
+    if (column < 0) return `selected anchor ${anchor.resid} refers to an unknown protein range`;
     const lockPositions: number[] = [];
     for (const lock of anchor.locks) {
       const position = rowIndex.get(lock.fragment);
@@ -219,42 +230,28 @@ export function validateStage5InteractionMatrix(
       lockPositions.push(position);
     }
     if (!lockPositions.length) return `selected anchor ${anchor.resid} has no candidate locks`;
+    const rangeAnchors = anchorsByRange.get(anchor.range) ?? [];
+    rangeAnchors.push(anchor);
+    anchorsByRange.set(anchor.range, rangeAnchors);
+  }
+  for (const [column, range] of matrixRanges.entries()) {
+    const locks = (anchorsByRange.get(range) ?? []).flatMap(anchor => anchor.locks
+      .map(lock => rowIndex.get(lock.fragment)).filter((position): position is number => position !== undefined));
     let index = 0;
-    const columnIntervals: Array<{ first: number; last: number }> = [];
     while (index < rows.length) {
       if (!grid[index][column]) { index += 1; continue; }
       const first = index;
       while (index + 1 < rows.length && grid[index + 1][column]) index += 1;
       const last = index;
-      if (!lockPositions.some(position => position >= first && position <= last)) {
-        return `true run in ${anchor.range} has no selected anchor`;
+      if (!locks.some(position => position >= first && position <= last)) {
+        return `true run in ${range} has no selected anchor`;
       }
       for (let row = first; row <= last; row += 1) {
-        if (!hasValidEnergies(energetics, anchor.range, rows[row])) {
-          return `scoring error at ${rows[row]} / ${anchor.range}`;
+        if (!hasValidEnergies(energetics, range, rows[row])) {
+          return `scoring error at ${rows[row]} / ${range}`;
         }
       }
-      columnIntervals.push({ first, last });
       index += 1;
-    }
-    if (columnIntervals.length > 1) return `anchor column ${column} has more than one run`;
-    const firstInterval = columnIntervals[0];
-    if (firstInterval) {
-      const rangeIntervals = intervals.get(anchor.range) ?? [];
-      rangeIntervals.push({ column, ...firstInterval });
-      intervals.set(anchor.range, rangeIntervals);
-    }
-  }
-  for (const [range, rangeIntervals] of intervals) {
-    const ordered = [...rangeIntervals].sort((left, right) => left.first - right.first
-      || left.last - right.last || left.column - right.column);
-    for (let index = 1; index < ordered.length; index += 1) {
-      const left = ordered[index - 1];
-      const right = ordered[index];
-      if (right.first <= left.last + 1
-        && (right.first !== left.first || right.last !== left.last)) {
-        return `touching or overlapping anchors in ${range} must share a joined run`;
-      }
     }
   }
   return null;
@@ -266,13 +263,25 @@ export function recomputeInteractionMatrix(
   energetics: unknown,
 ): Stage5S14 | null {
   if (!isRecord(matrix) || !Array.isArray(matrix.rows) || !Array.isArray(matrix.ranges)
-    || matrix.ranges.length !== anchors.length
-    || matrix.ranges.some((range: unknown, index: number) => range !== anchors[index].range)) return null;
+    || matrix.ranges.some((range: unknown) => typeof range !== 'string')
+    || new Set(matrix.ranges).size !== matrix.ranges.length
+    || anchors.some(anchor => !matrix.ranges.includes(anchor.range))) return null;
   const rows = matrix.rows as string[];
   const positions = new Map(rows.map((key, index) => [key, index]));
-  const grid = rows.map(() => anchors.map(() => false));
-  const byRange = new Map<string, Array<{ column: number; first: number; last: number }>>();
-  for (const [column, anchor] of anchors.entries()) {
+  const ranges = matrix.ranges as string[];
+  const grid = rows.map(() => ranges.map(() => false));
+  const locksByRange = new Map<string, Set<number>>();
+  for (const anchor of anchors) {
+    const locks = locksByRange.get(anchor.range) ?? new Set<number>();
+    for (const lock of anchor.locks) {
+      const position = positions.get(lock.fragment);
+      if (position === undefined) return null;
+      locks.add(position);
+    }
+    locksByRange.set(anchor.range, locks);
+  }
+  for (const anchor of anchors) {
+    const column = ranges.indexOf(anchor.range);
     const locks = anchor.locks.map(lock => positions.get(lock.fragment));
     if (!locks.length || locks.some(position => position === undefined)) return null;
     for (const position of locks as number[]) {
@@ -280,29 +289,12 @@ export function recomputeInteractionMatrix(
     }
     let first = Math.min(...locks as number[]);
     let last = Math.max(...locks as number[]);
-    const otherLocks = new Set(anchors.flatMap((other, otherColumn) => otherColumn !== column
-      && other.range === anchor.range ? other.locks.map(lock => positions.get(lock.fragment)!) : []));
+    const otherLocks = new Set(locksByRange.get(anchor.range));
+    for (const position of locks) if (position !== undefined) otherLocks.delete(position);
     while (first > 0 && !otherLocks.has(first - 1) && grows(energetics, anchor.range, rows[first - 1])) first -= 1;
     while (last + 1 < rows.length && !otherLocks.has(last + 1)
       && grows(energetics, anchor.range, rows[last + 1])) last += 1;
-    const sameRange = byRange.get(anchor.range) ?? [];
-    sameRange.push({ column, first, last });
-    byRange.set(anchor.range, sameRange);
-  }
-  for (const rangeIntervals of byRange.values()) {
-    const ordered = [...rangeIntervals].sort((left, right) => left.first - right.first
-      || left.last - right.last || left.column - right.column);
-    const components: Array<typeof ordered> = [];
-    for (const item of ordered) {
-      const tail = components.at(-1);
-      if (tail && item.first <= Math.max(...tail.map(value => value.last)) + 1) tail.push(item);
-      else components.push([item]);
-    }
-    for (const component of components) {
-      const first = Math.min(...component.map(item => item.first));
-      const last = Math.max(...component.map(item => item.last));
-      for (const item of component) for (let row = first; row <= last; row += 1) grid[row][item.column] = true;
-    }
+    for (let row = first; row <= last; row += 1) grid[row][column] = true;
   }
   return { ...matrix, grid } as Stage5S14;
 }
@@ -317,20 +309,11 @@ export function toggleStage5MatrixCell(
   if (row < 0 || row >= matrix.rows.length || column < 0 || column >= matrix.ranges.length) return null;
   const next = { ...matrix, grid: matrix.grid.map(values => [...values]) };
   const value = !next.grid[row][column];
-  const range = matrix.ranges[column];
-  const sameRunColumns = matrix.ranges.map((item, index) => item === range
-    && matrix.grid.every((line, rowIndex) => line[index] === matrix.grid[rowIndex][column]) ? index : -1)
-    .filter(index => index >= 0);
-  for (const target of sameRunColumns) next.grid[row][target] = value;
-  return validateStage5InteractionMatrix(next, matrix.rows, anchors, energetics) === null ? next : null;
+  next.grid[row][column] = value;
+  return validateStage5InteractionMatrix(next, matrix.rows, anchors, energetics, matrix.ranges) === null ? next : null;
 }
 
 export interface UntilNextAnchorState { nextColumn: number | null; allowed: boolean; joined: boolean; forced: boolean }
-
-function columnInterval(matrix: Stage5S14, column: number): { first: number; last: number } | null {
-  const occupied = matrix.grid.map((row, index) => row[column] ? index : -1).filter(index => index >= 0);
-  return occupied.length ? { first: occupied[0], last: occupied.at(-1)! } : null;
-}
 
 function lockInterval(anchor: Stage5Anchor, rows: readonly string[]): { first: number; last: number } | null {
   const positions = anchor.locks.map(lock => rows.indexOf(lock.fragment));
@@ -341,13 +324,13 @@ function lockInterval(anchor: Stage5Anchor, rows: readonly string[]): { first: n
 /** Describe the optional link to the next downstream anchor on the same range. */
 export function untilNextAnchorState(
   matrix: Stage5S14,
-  column: number,
+  anchorIndex: number,
   anchors: readonly Stage5Anchor[],
 ): UntilNextAnchorState {
-  const current = anchors[column];
+  const current = anchors[anchorIndex];
   if (!current) return { nextColumn: null, allowed: false, joined: false, forced: false };
   let nextColumn: number | null = null;
-  for (let index = column + 1; index < anchors.length; index += 1) {
+  for (let index = anchorIndex + 1; index < anchors.length; index += 1) {
     if (anchors[index].range === current.range) { nextColumn = index; break; }
   }
   if (nextColumn === null) return { nextColumn: null, allowed: false, joined: false, forced: false };
@@ -355,71 +338,41 @@ export function untilNextAnchorState(
   const rightLocks = lockInterval(anchors[nextColumn], matrix.rows);
   if (!leftLocks || !rightLocks) return { nextColumn, allowed: false, joined: false, forced: false };
   const forced = rightLocks.first <= leftLocks.last + 1;
-  const left = columnInterval(matrix, column);
-  const right = columnInterval(matrix, nextColumn);
-  const joined = !!left && !!right && left.first === right.first && left.last === right.last;
+  const rangeColumn = matrix.ranges.indexOf(current.range);
+  if (rangeColumn < 0) return { nextColumn, allowed: false, joined: false, forced: false };
+  const first = Math.min(leftLocks.first, rightLocks.first);
+  const last = Math.max(leftLocks.last, rightLocks.last);
+  const joined = matrix.grid.slice(first, last + 1).every(row => row[rangeColumn] === true);
   return { nextColumn, allowed: true, joined, forced };
 }
 
-/** Join or split the current column and its next same-range anchor. */
+/** Join or split successive same-range anchors inside their shared range column. */
 export function setStage5UntilNextAnchor(
   matrix: Stage5S14,
-  column: number,
+  anchorIndex: number,
   enabled: boolean,
   anchors: readonly Stage5Anchor[],
   energetics: unknown,
 ): Stage5S14 | null {
-  const state = untilNextAnchorState(matrix, column, anchors);
+  const state = untilNextAnchorState(matrix, anchorIndex, anchors);
   if (!state.allowed || state.nextColumn === null || (!enabled && state.forced)) return null;
   if (enabled === state.joined) return matrix;
-  const range = anchors[column].range;
-  const sameRangeColumns = anchors.map((anchor, index) => anchor.range === range ? index : -1)
-    .filter(index => index >= 0);
-  const leftPosition = sameRangeColumns.indexOf(column);
-  const rightPosition = sameRangeColumns.indexOf(state.nextColumn);
-  if (leftPosition < 0 || rightPosition !== leftPosition + 1) return null;
-
-  const links = sameRangeColumns.slice(0, -1).map((leftColumn, index) => {
-    const left = columnInterval(matrix, leftColumn);
-    const right = columnInterval(matrix, sameRangeColumns[index + 1]);
-    return !!left && !!right && left.first === right.first && left.last === right.last;
-  });
-  let componentStart = leftPosition;
-  let componentEnd = rightPosition;
-  while (componentStart > 0 && links[componentStart - 1]) componentStart -= 1;
-  while (componentEnd < links.length && links[componentEnd]) componentEnd += 1;
-  const componentColumns = sameRangeColumns.slice(componentStart, componentEnd + 1);
-  const componentIntervals = componentColumns.map(target => columnInterval(matrix, target));
-  if (componentIntervals.some(interval => interval === null)) return null;
-  const first = Math.min(...componentIntervals.map(interval => interval!.first));
-  const last = Math.max(...componentIntervals.map(interval => interval!.last));
+  const leftLocks = lockInterval(anchors[anchorIndex], matrix.rows);
+  const rightLocks = lockInterval(anchors[state.nextColumn], matrix.rows);
+  if (!leftLocks || !rightLocks) return null;
+  const rangeColumn = matrix.ranges.indexOf(anchors[anchorIndex].range);
+  if (rangeColumn < 0) return null;
   const next = { ...matrix, grid: matrix.grid.map(row => [...row]) };
 
   if (enabled) {
-    for (const target of componentColumns) {
-      for (let row = first; row <= last; row += 1) next.grid[row][target] = true;
-    }
+    const first = Math.min(leftLocks.first, rightLocks.first);
+    const last = Math.max(leftLocks.last, rightLocks.last);
+    for (let row = first; row <= last; row += 1) next.grid[row][rangeColumn] = true;
   } else {
-    const leftColumns = sameRangeColumns.slice(componentStart, leftPosition + 1);
-    const rightColumns = sameRangeColumns.slice(rightPosition, componentEnd + 1);
-    const leftLocks = leftColumns.flatMap(target => anchors[target].locks.map(lock => matrix.rows.indexOf(lock.fragment)));
-    const rightLocks = rightColumns.flatMap(target => anchors[target].locks.map(lock => matrix.rows.indexOf(lock.fragment)));
-    if (!leftLocks.length || !rightLocks.length || leftLocks.some(index => index < 0) || rightLocks.some(index => index < 0)) return null;
-    const leftLast = Math.max(...leftLocks);
-    const rightFirst = Math.min(...rightLocks);
-    if (rightFirst <= leftLast + 1) return null;
-    for (const target of leftColumns) {
-      for (let row = 0; row < matrix.rows.length; row += 1) {
-        next.grid[row][target] = row >= first && row <= Math.min(last, leftLast);
-      }
-    }
-    for (const target of rightColumns) {
-      for (let row = 0; row < matrix.rows.length; row += 1) {
-        next.grid[row][target] = row >= Math.max(first, rightFirst) && row <= last;
-      }
-    }
+    if (rightLocks.first <= leftLocks.last + 1) return null;
+    for (let row = leftLocks.last + 1; row < rightLocks.first; row += 1) next.grid[row][rangeColumn] = false;
   }
-  return validateStage5InteractionMatrix(next, matrix.rows, anchors, energetics) === null ? next : null;
+  return validateStage5InteractionMatrix(next, matrix.rows, anchors, energetics, matrix.ranges) === null ? next : null;
 }
 
 function energyCell(energetics: unknown, range: string, fragment: string): any | null {
@@ -447,6 +400,7 @@ export function adaptInteractionMatrix(
   energetics: unknown,
 ): Stage5S14 | null {
   if (!isRecord(matrix) || !Array.isArray(matrix.rows) || !Array.isArray(matrix.ranges)
+    || matrix.ranges.some((range: unknown) => typeof range !== 'string')
     || !Array.isArray(matrix.grid) || matrix.grid.length !== matrix.rows.length
     || matrix.grid.some((row: unknown) => !Array.isArray(row) || row.length !== matrix.ranges.length
       || row.some((cell: unknown) => typeof cell !== 'boolean'))
@@ -455,10 +409,9 @@ export function adaptInteractionMatrix(
   const positions = new Map(newRows.map((key, index) => [key, index]));
   const mapped = oldRows.filter(key => positions.has(key)).map(key => positions.get(key)!);
   if (!mapped.length || mapped.some((position, index) => index > 0 && position !== mapped[index - 1] + 1)) return null;
-  if (anchors.some(anchor => !matrix.ranges.includes(anchor.range)
+  if (new Set(matrix.ranges).size !== matrix.ranges.length
+    || anchors.some(anchor => !matrix.ranges.includes(anchor.range)
     || !Array.isArray(anchor.locks) || anchor.locks.some((lock: any) => !positions.has(lock.fragment)))) return null;
-  if (anchors.length !== matrix.ranges.length
-    || anchors.some((anchor, index) => anchor.range !== matrix.ranges[index])) return null;
   const grid = newRows.map(() => matrix.ranges.map(() => false));
   const oldIndex = new Map(oldRows.map((key, index) => [key, index]));
   for (const [newIndex, key] of newRows.entries()) {
@@ -477,32 +430,6 @@ export function adaptInteractionMatrix(
       }
     });
   }
-  const columnsByRange = new Map<string, number[]>();
-  matrix.ranges.forEach((range: string, column: number) => {
-    const columns = columnsByRange.get(range) ?? [];
-    columns.push(column);
-    columnsByRange.set(range, columns);
-  });
-  for (const columns of columnsByRange.values()) {
-    const intervals = columns.map(column => {
-      const occupied = grid.map((row, index) => row[column] ? index : -1).filter(index => index >= 0);
-      return occupied.length ? { columns: [column], first: occupied[0], last: occupied.at(-1)! } : null;
-    }).filter((item): item is { columns: number[]; first: number; last: number } => item !== null)
-      .sort((left, right) => left.first - right.first || left.last - right.last);
-    const components: Array<{ columns: number[]; first: number; last: number }> = [];
-    for (const interval of intervals) {
-      const tail = components.at(-1);
-      if (tail && interval.first <= tail.last + 1) {
-        tail.last = Math.max(tail.last, interval.last);
-        tail.columns.push(...interval.columns);
-      } else components.push({ ...interval });
-    }
-    for (const component of components.filter(item => item.columns.length > 1)) {
-      for (const column of component.columns) {
-        for (let index = component.first; index <= component.last; index += 1) grid[index][column] = true;
-      }
-    }
-  }
   return { ...matrix, rows: [...newRows], grid } as Stage5S14;
 }
 
@@ -515,7 +442,7 @@ export function stage5CanAdvance(
     bestFitsFresh: boolean;
     geometryFresh: boolean;
     gaussianFresh: boolean;
-    gaussianClassesValid: boolean;
+    gaussianBackendFailed?: boolean;
     validatorFailed: boolean;
     fragments: unknown;
     rangeRows: unknown;
@@ -529,7 +456,8 @@ export function stage5CanAdvance(
   if (!state.ready || state.stage !== 5) reasons.push('The shared project is not live in stage 5.');
   if (!state.energeticsFresh) reasons.push('Energetics do not match the current best fits and protein ranges.');
   if (!state.bestFitsFresh || !state.geometryFresh) reasons.push('Best-fit geometry is stale.');
-  if (!state.gaussianFresh || !state.gaussianClassesValid) reasons.push('Fresh Gaussian scores and valid classes are required.');
+  if (!state.gaussianFresh) reasons.push('Fresh Gaussian scores are required.');
+  if (state.gaussianBackendFailed) reasons.push('Best-fit stacking geometry or Gaussian scoring failed.');
   if (state.validatorFailed) reasons.push('Energy-threshold validation failed.');
   if (!energyThresholdEditsIsWellFormed(state.energyEdits)) reasons.push('The energy-threshold edits are malformed.');
   if (!isRecord(state.fragments) || !isRecord(state.fragments.echo)
@@ -539,11 +467,11 @@ export function stage5CanAdvance(
   const rows = stage5Rows(state.fragments, snapshot.best_fit_clip);
   const anchors = state.anchors ?? (rows && state.stackings !== undefined
     ? candidateAnchors(state.fragments, snapshot.stacking_selection, state.stackings, rows) : null);
-  const ranges = anchors ? anchors.map(anchor => anchor.range) : stage5RangeIds(state.rangeRows);
+  const ranges = stage5RangeIds(state.rangeRows);
   const matrix = snapshot.interaction_matrix;
   let matrixError = rows && ranges ? validateStage5MatrixRead(matrix, rows, ranges) : 'matrix extent is unavailable';
   if (!matrixError && anchors && state.energetics) {
-    matrixError = validateStage5InteractionMatrix(matrix, rows!, anchors, state.energetics);
+    matrixError = validateStage5InteractionMatrix(matrix, rows!, anchors, state.energetics, ranges!);
   }
   if (state.stackings !== undefined && !anchors) matrixError = 'selected anchors are unavailable';
   if (matrixError || !markerIsWellFormed('interaction_matrix', matrix)

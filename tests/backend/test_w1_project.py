@@ -7,6 +7,8 @@ The frontend companion set covers pure stage/freshness/error semantics.
 import importlib.util
 import json
 from pathlib import Path
+from urllib.error import HTTPError
+from urllib.request import urlopen
 
 import pytest
 import seamless.config
@@ -118,6 +120,52 @@ def test_all_decisions_and_cif_are_file_authoritative_mounts(monkeypatch, tmp_pa
             assert getattr(context, name).share.spec.readonly is False, name
         assert context.range_specs.share.spec.readonly is True
         assert context.range_pdbs.share.spec is None
+
+        cell_files = {
+            "best_fit_thresholds": "best-fit-thresholds.json",
+            "energy_thresholds": "computed-energy-thresholds.json",
+            "interactions": "interactions.json",
+            "gaussian_validation": "gaussian-validation.json",
+            "refe_validation": "refe-validation.json",
+        }
+        for name, filename in cell_files.items():
+            mount = getattr(context, name).mount.spec
+            assert mount.authority == "cell", name
+            assert mount.mode == "w", name
+            assert Path(mount.path) == tmp_path / filename, name
+
+        published = {
+            "best_fit_thresholds": context.best_fit_thresholds,
+            "best_fits": context.best_fits,
+            "bestfit_stackings": context.bestfit_stackings,
+            "energy_thresholds": context.energy_thresholds,
+            "energetics": context.energetics,
+            "interactions": context.interactions,
+            "gaussian_validation": context.gaussian_validation,
+            "refe_validation": context.refe_validation,
+            "gaussian_scores": context.gaussian_scores,
+            "reference_fragment_pdbs": context.reference_fragment_pdbs,
+        }
+        server_paths = context.shares.openapi()["paths"]
+        for name, cell in published.items():
+            share = cell.share
+            assert share.spec.readonly is True, name
+            assert share.spec.path == name, name
+            route = f"/preparic/{name}"
+            assert route in server_paths, name
+            assert share.url.endswith(route), name
+
+        for name in ("best_fits", "bestfit_stackings", "gaussian_scores"):
+            assert getattr(context, name).mount.spec is None, name
+
+        # Exercise the actual T8 URL as a browser does. 404 means the route is
+        # registered but its computed value is not available yet; OpenAPI
+        # above independently proves the route itself is live.
+        try:
+            with urlopen(context.best_fit_thresholds.share.url, timeout=5) as response:
+                assert response.status in (200, 204)
+        except HTTPError as error:
+            assert error.code == 404
     finally:
         context.close()
         backend.ctx = None

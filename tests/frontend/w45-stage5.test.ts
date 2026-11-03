@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
-  adaptInteractionMatrix, candidateAnchors, makeInteractionMatrix, reconcileEnergyThresholdEdits,
+  adaptInteractionMatrix, candidateAnchors, cloneStage5Decision, makeInteractionMatrix, reconcileEnergyThresholdEdits,
   recomputeInteractionMatrix, toggleStage5MatrixCell, validateStage5InteractionMatrix,
   stage5CanAdvance, stage5RangeIds, stage5Rows, validEnergyEdit,
   validateStage5MatrixRead, setStage5UntilNextAnchor,
@@ -73,6 +73,26 @@ describe('W5 E1 addressed S24 reconciliation', () => {
 });
 
 describe('W5 M5 structural read refusal', () => {
+  it('copies reactive S14 and S24 JSON markers without structuredClone proxy errors', () => {
+    const reactive = (value: any): any => {
+      if (value === null || typeof value !== 'object') return value;
+      return new Proxy(value, {
+        get(target, key, receiver) {
+          return reactive(Reflect.get(target, key, receiver));
+        },
+      });
+    };
+    const markers = [matrix(), reconcileEnergyThresholdEdits(null, fragments, rangeRows)!];
+    for (const marker of markers) {
+      const proxied = reactive(marker);
+      expect(() => structuredClone(proxied)).toThrow();
+      const copy = cloneStage5Decision(proxied as any);
+      expect(copy).toEqual(marker);
+      expect(copy).not.toBe(proxied);
+      expect(copy.ranges).not.toBe(proxied.ranges);
+    }
+  });
+
   it('builds addressed rows and ranges from clip decisions', () => {
     expect(stage5Rows(fragments, { clip1: 1, clip2: 2 })).toEqual(keys.slice(1, -2));
     expect(stage5RangeIds(rangeRows)).toEqual(ranges);
@@ -86,7 +106,7 @@ describe('W5 M5 structural read refusal', () => {
     expected.basis = Object.keys(selected.selected).sort();
     expect(makeInteractionMatrix(mapped, clip, rangeRows, selected, stacks)).toEqual(expected);
   });
-  it.each(['schema', 'row-count', 'ragged', 'zero', 'one', 'null', 'string', 'duplicate-row', 'order', 'range-order', 'extent'])('refuses %s without mutating the read', kind => {
+  it.each(['schema', 'row-count', 'ragged', 'zero', 'one', 'null', 'string', 'duplicate-row', 'order', 'range-order', 'duplicate-range', 'extent'])('refuses %s without mutating the read', kind => {
     const value = matrix();
     if (kind === 'schema') value.schema = 2;
     if (kind === 'row-count') value.grid.pop();
@@ -95,6 +115,7 @@ describe('W5 M5 structural read refusal', () => {
     if (kind === 'duplicate-row') value.rows[0] = value.rows[1];
     if (kind === 'order') value.rows.reverse();
     if (kind === 'range-order') value.ranges.reverse();
+    if (kind === 'duplicate-range') value.ranges[1] = value.ranges[0];
     if (kind === 'extent') value.rows.pop();
     const before = structuredClone(value);
     expect(validateStage5MatrixRead(value, keys, ranges)).toBeTypeOf('string');
@@ -154,10 +175,19 @@ describe('W5 E3 stage 5→6 gates', () => {
     const { snapshot, state } = gateFixture();
     expect(stage5CanAdvance(snapshot, state)).toEqual({ allowed: true, reasons: [] });
   });
-  it.each(['ready', 'energeticsFresh', 'bestFitsFresh', 'geometryFresh', 'gaussianFresh', 'gaussianClassesValid'])('requires %s', key => {
+  it.each(['ready', 'energeticsFresh', 'bestFitsFresh', 'geometryFresh', 'gaussianFresh'])('requires %s', key => {
     const { snapshot, state } = gateFixture();
     state[key] = false;
     expect(stage5CanAdvance(snapshot, state).allowed).toBe(false);
+  });
+  it('does not require an existing Gaussian class table for first entry to stage 6', () => {
+    const { snapshot, state } = gateFixture();
+    expect(snapshot.gaussian_classes).toBeNull();
+    expect(stage5CanAdvance(snapshot, state)).toEqual({ allowed: true, reasons: [] });
+  });
+  it('closes first entry when best-fit stacking or Gaussian scoring failed', () => {
+    const { snapshot, state } = gateFixture();
+    expect(stage5CanAdvance(snapshot, { ...state, gaussianBackendFailed: true }).allowed).toBe(false);
   });
   it('blocks a failed T27 and the wrong stage', () => {
     const { snapshot, state } = gateFixture();
@@ -195,7 +225,7 @@ describe('W5 E3 stage 5→6 gates', () => {
 });
 
 
-describe('W5 P5.3/P5.4 anchor columns and Recompute', () => {
+describe('W5 P5.3/P5.4 range columns, anchor locks, and Recompute', () => {
   const mapped = { ...fragments, fragments: keys.map((key, index) => ({ key,
     residues: [{ resid: 101 + 2 * index }, { resid: 102 + 2 * index }] })) };
   function anchorAt(row: number, range = 'range-2', locks = [row]): any {
@@ -203,7 +233,8 @@ describe('W5 P5.3/P5.4 anchor columns and Recompute', () => {
       locks: locks.map(n => ({ fragment: keys[n - 1], nucleotide: 1 })) };
   }
   function emptyFor(items: any[]): any {
-    return { ...matrix(), ranges: items.map(item => item.range), grid: keys.map(() => items.map(() => false)) };
+    return { ...matrix(), basis: items.flatMap(item => item.stackings), ranges: [...ranges],
+      grid: keys.map(() => ranges.map(() => false)) };
   }
   function vector(): any {
     const result = energetics();
@@ -221,7 +252,7 @@ describe('W5 P5.3/P5.4 anchor columns and Recompute', () => {
   function columnRows(value: any, column: number): string[] {
     return value.rows.filter((_: string, row: number) => value.grid[row][column]);
   }
-  it('collapses equal anchors only, preserves original stacking jobs, and sorts repeated range columns along RNA', () => {
+  it('keeps unique range columns while preserving every selected stacking job and anchor lock', () => {
     const addresses = [[115, 2, 8], [107, 3, 9], [105, 2, 10], [105, 2, 11]];
     const stacks = addresses.map(([resid, range, protein]) => ({ rna_resname: 'G', rna_resid: resid,
       protein_range_pdb_id: range, protein_resid: protein }));
@@ -234,11 +265,11 @@ describe('W5 P5.3/P5.4 anchor columns and Recompute', () => {
     expect(actual.map(item => item.stackings.length)).toEqual([2, 1, 1]);
     expect(actual.flatMap(item => item.stackings).sort()).toEqual([...originalKeys].sort());
     const value = makeInteractionMatrix(mapped, clip, rangeRows, selected, stacks)!;
-    expect(value.ranges).toEqual(['range-2', 'range-3', 'range-2']);
-    expect(value.grid.every(row => row.length === 3)).toBe(true);
+    expect(value.ranges).toEqual(['range-2', 'range-3']);
+    expect(value.grid.every(row => row.length === 2)).toBe(true);
     expect(value.basis).toEqual([...originalKeys].sort());
     expect(selected).toEqual(before);
-    expect(validateStage5MatrixRead(value, keys, ['range-2', 'range-3', 'range-2'])).toBeNull();
+    expect(validateStage5MatrixRead(value, keys, ['range-2', 'range-3'])).toBeNull();
   });
   it('maps a shared residue to both fragment candidates and their nucleotide positions', () => {
     const shared = structuredClone(mapped);
@@ -254,25 +285,26 @@ describe('W5 P5.3/P5.4 anchor columns and Recompute', () => {
     const items = [anchorAt(4)];
     const energy = vector();
     const actual = recomputeInteractionMatrix(emptyFor(items), items, energy)!;
-    expect(actual.ranges).toEqual(['range-2']);
+    expect(actual.ranges).toEqual(ranges);
     expect(columnRows(actual, 0)).toEqual(keys.slice(2, 6));
     expect(validateStage5InteractionMatrix(actual, keys, items, energy)).toBeNull();
-    const clipped = { ...emptyFor(items), rows: keys.slice(3, 6), grid: keys.slice(3, 6).map(() => [false]) };
+    const clipped = { ...emptyFor(items), rows: keys.slice(3, 6), grid: keys.slice(3, 6).map(() => ranges.map(() => false)) };
     expect(columnRows(recomputeInteractionMatrix(clipped, items, energy), 0)).toEqual(keys.slice(3, 6));
   });
-  it('M2 allows independent ranges to overlap and leaves unanchored ranges absent', () => {
+  it('M2 allows independent ranges to overlap and keeps unanchored range columns empty', () => {
     const items = [anchorAt(4), anchorAt(5, 'range-3')];
     const actual = recomputeInteractionMatrix(emptyFor(items), items, vector())!;
     expect(columnRows(actual, 0)).toEqual(keys.slice(2, 6));
     expect(columnRows(actual, 1)).toEqual([keys[4]]);
-    expect(actual.ranges).not.toContain('range-4');
+    expect(actual.ranges).toEqual(ranges);
+    expect(columnRows(actual, 2)).toEqual([]);
   });
-  it.each([[[3, 4], [5, 6]], [[3, 4], [4, 5]]])('M3 joins touching/overlapping locks while retaining both anchor columns (%j)', (left, right) => {
+  it.each([[[3, 4], [5, 6]], [[3, 4], [4, 5]]])('M3 joins touching/overlapping locks in their shared range column (%j)', (left, right) => {
     const items = [anchorAt(3, 'range-2', left), anchorAt(5, 'range-2', right)];
     const actual = recomputeInteractionMatrix(emptyFor(items), items, energetics())!;
-    expect(actual.ranges).toEqual(['range-2', 'range-2']);
+    expect(actual.ranges).toEqual(ranges);
     expect(columnRows(actual, 0)).toEqual(keys);
-    expect(columnRows(actual, 1)).toEqual(keys);
+    expect(columnRows(actual, 1)).toEqual([]);
     expect(validateStage5InteractionMatrix(actual, keys, items, energetics())).toBeNull();
     expect(toggleStage5MatrixCell(actual, 3, 0, items, energetics())).toBeNull(); // cannot remove any joined lock
   });
@@ -295,14 +327,14 @@ describe('W5 P5.3/P5.4 anchor columns and Recompute', () => {
     expect(validateStage5InteractionMatrix(bad, keys, items, energy)).toMatch(/error/i);
     expect(recomputeInteractionMatrix(emptyFor([anchorAt(7)]), [anchorAt(7)], energy)).toBeNull();
   });
-  it('refuses unmatched same-range overlap, but accepts fully joined repeated columns', () => {
+  it('refuses duplicate range columns rather than normalizing an old marker', () => {
     const items = [anchorAt(3), anchorAt(6)];
     const value = emptyFor(items);
-    [1, 2, 3].forEach(row => { value.grid[row][0] = true; });
-    [3, 4, 5].forEach(row => { value.grid[row][1] = true; });
+    value.ranges = ['range-2', 'range-2'];
+    value.grid = keys.map(() => [false, false]);
     expect(validateStage5InteractionMatrix(value, keys, items, energetics())).not.toBeNull();
-    for (let row = 1; row <= 5; row += 1) value.grid[row] = [true, true];
-    expect(validateStage5InteractionMatrix(value, keys, items, energetics())).toBeNull();
+    expect(adaptInteractionMatrix(value, keys, items, energetics())).toBeNull();
+    expect(recomputeInteractionMatrix(value, items, energetics())).toBeNull();
   });
 
   it('Until next anchor joins and can unjoin disjoint same-range locks', () => {
@@ -316,13 +348,40 @@ describe('W5 P5.3/P5.4 anchor columns and Recompute', () => {
     }
     const separated = recomputeInteractionMatrix(emptyFor(items), items, energy)!;
     separated.grid[1][0] = true; // retain an outer cap before the first lock
-    separated.grid[6][1] = true; // retain an outer cap after the second lock
+    separated.grid[6][0] = true; // retain an outer cap after the second lock
     const joined = setStage5UntilNextAnchor(separated, 0, true, items, energy)!;
     expect(joined.grid.map(row => row[0])).toEqual([false, true, true, true, true, true, true, false, false]);
-    expect(joined.grid.map(row => row[1])).toEqual([false, true, true, true, true, true, true, false, false]);
+    expect(joined.grid.map(row => row[1])).toEqual(Array(9).fill(false));
     const split = setStage5UntilNextAnchor(joined, 0, false, items, energy)!;
-    expect(split.grid.map(row => row[0])).toEqual([false, true, true, false, false, false, false, false, false]);
-    expect(split.grid.map(row => row[1])).toEqual([false, false, false, false, false, true, true, false, false]);
+    expect(split.grid.map(row => row[0])).toEqual([false, true, true, false, false, true, true, false, false]);
+    expect(split.grid.map(row => row[1])).toEqual(Array(9).fill(false));
+    expect(validateStage5InteractionMatrix(split, keys, items, energy)).toBeNull();
+  });
+
+  it('keeps four anchors in two shared range columns and links successive same-range locks', () => {
+    const items = [anchorAt(3, 'range-2'), anchorAt(4, 'range-3'),
+      anchorAt(7, 'range-2'), anchorAt(8, 'range-3')];
+    const energy = energetics();
+    for (const range of energy.ranges) for (const row of range.rows) {
+      row.reference.energy = 0.5;
+      row.bestfit.energy = 0.5;
+    }
+    const separated = recomputeInteractionMatrix(emptyFor(items), items, energy)!;
+    expect(separated.ranges).toEqual(ranges);
+    expect(separated.grid).toHaveLength(keys.length);
+    expect(separated.grid.every(row => row.length === 2)).toBe(true);
+    expect(separated.grid[2][0]).toBe(true);
+    expect(separated.grid[6][0]).toBe(true);
+    expect(separated.grid[3][1]).toBe(true);
+    expect(separated.grid[7][1]).toBe(true);
+
+    const joined = setStage5UntilNextAnchor(separated, 0, true, items, energy)!;
+    expect(joined.grid.slice(2, 7).every(row => row[0])).toBe(true);
+    expect(joined.grid[4][1]).toBe(false);
+    const split = setStage5UntilNextAnchor(joined, 0, false, items, energy)!;
+    expect(split.grid[2][0]).toBe(true);
+    expect(split.grid[6][0]).toBe(true);
+    expect(split.grid.slice(3, 6).every(row => !row[0])).toBe(true);
     expect(validateStage5InteractionMatrix(split, keys, items, energy)).toBeNull();
   });
 
@@ -331,7 +390,7 @@ describe('W5 P5.3/P5.4 anchor columns and Recompute', () => {
       const items = [anchorAt(3, 'range-2', left), anchorAt(5, 'range-2', right)];
       const energy = energetics();
       const joined = recomputeInteractionMatrix(emptyFor(items), items, energy)!;
-      expect(joined.grid.map(row => row[0])).toEqual(joined.grid.map(row => row[1]));
+      expect(joined.grid.map(row => row[0])).toEqual(keys.map(() => true));
       expect(setStage5UntilNextAnchor(joined, 0, false, items, energy)).toBeNull();
     },
   );
@@ -347,6 +406,18 @@ describe('W4/W5 integrated contract wiring', () => {
     const transition = app.slice(start, end);
     expect(transition).toContain('canContinueStage4');
     expect(transition).not.toContain('computedFreshness.best_fit_thresholds');
+  });
+
+  it('renders one accessible range column with the selected anchors and locks in its header', () => {
+    const stage5 = source('src/components/Stage5Energetics.svelte');
+    expect(stage5).toContain('cloneStage5Decision');
+    expect(stage5).not.toContain('structuredClone(');
+    expect(stage5).toContain('aria-label="Interaction matrix by protein range"');
+    expect(stage5).toContain('aria-label={`Protein range ${rangeId}`}');
+    expect(stage5).toContain('Anchor {anchor.resid}:');
+    expect(stage5).toContain('lock.fragment} (nt ${lock.nucleotide})');
+    expect(stage5).toContain('Join anchor ${anchor.resid} to anchor ${nextAnchor.resid} in ${rangeId}');
+    expect(stage5).not.toContain('aria-label="Per-anchor interaction selections"');
   });
 
   it('test_continue_4_to_5_rechecks_fresh_energetics_before_any_write', () => {

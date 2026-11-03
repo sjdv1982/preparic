@@ -120,6 +120,7 @@ interface DebouncedProjectDecision {
   promise: Promise<boolean>;
   resolve: (accepted: boolean) => void;
   applying: boolean;
+  trailingReady: boolean;
 }
 export type ShareConnector = (
   updateServer?: ShareAddress,
@@ -204,6 +205,12 @@ const requiredEditShares: readonly ShareKey[] = [
   'best_fit_clip', 'interaction_matrix', 'energy_threshold_edits', 'gaussian_classes',
 ];
 const requiredComputedShares: readonly ShareKey[] = ['structure_id'];
+const computedShareKeys: readonly ShareKey[] = [
+  'range_specs', 'structure_id', 'range_pdbs_aa', 'stackings', 'fragments',
+  'reference_fragment_pdbs', 'best_fit_thresholds', 'best_fits', 'energetics',
+  'energy_thresholds', 'interactions', 'bestfit_stackings', 'gaussian_validation',
+  'refe_validation', 'gaussian_scores',
+];
 let websocketPoll: ReturnType<typeof setInterval> | undefined;
 let hasConnectedBefore = false;
 let websocketWasOpen = false;
@@ -301,11 +308,13 @@ function recordDecision(key: DecisionKey, value: unknown): void {
 function markPendingInput(key: string): void {
   if (!seamlessState.pendingInputs.includes(key)) seamlessState.pendingInputs = [...seamlessState.pendingInputs, key];
   refreshVisibleErrors();
+  refreshComputedFreshness();
 }
 
 function clearPendingInput(key: string): void {
   seamlessState.pendingInputs = seamlessState.pendingInputs.filter(item => item !== key);
   refreshVisibleErrors();
+  refreshComputedFreshness();
 }
 
 function canonicalShareValue(key: string, value: SharedValue): unknown {
@@ -327,11 +336,17 @@ function serializeFreshShareValue(key: string, value: SharedValue): string {
   return typeof value === 'string' ? value : JSON.stringify(value ?? null);
 }
 
+function hasNewerDebouncedDecision(key: string, marker: unknown): boolean {
+  if (key !== 'best_fit_clip' && key !== 'gaussian_classes') return false;
+  const intent = debouncedProjectDecisions.get(key);
+  return !!intent?.applying && stableJson(intent.marker) !== stableJson(marker);
+}
+
 function resolvePendingShareWrite(key: string, accepted: boolean, conflict = false): void {
   const pending = pendingShareWrites.get(key);
   if (!pending) return;
   pendingShareWrites.delete(key);
-  clearPendingInput(key);
+  if (!hasNewerDebouncedDecision(key, pending.expected)) clearPendingInput(key);
   pending.resolve(accepted);
   if (conflict) {
     seamlessState.syncNotice = `A newer shared ${key.replaceAll('_', ' ')} value replaced this edit. The accepted project value is now shown.`;
@@ -404,6 +419,8 @@ function finishDebouncedProjectDecision(
   intent: DebouncedProjectDecision,
   accepted: boolean,
 ): void {
+  if (intent.timer !== undefined) clearTimeout(intent.timer);
+  intent.timer = undefined;
   if (debouncedProjectDecisions.get(key) === intent) {
     debouncedProjectDecisions.delete(key);
     clearPendingInput(key);
@@ -437,20 +454,65 @@ async function applyDebouncedProjectDecision(
   intent: DebouncedProjectDecision,
 ): Promise<boolean> {
   if (debouncedProjectDecisions.get(key) !== intent) return false;
-  if (intent.applying) return intent.promise;
+  if (intent.applying) {
+    if (intent.timer !== undefined) clearTimeout(intent.timer);
+    intent.timer = undefined;
+    intent.trailingReady = true;
+    return intent.promise;
+  }
   intent.timer = undefined;
   if (!debouncedProjectDecisionIsCurrent(key, intent)) {
     cancelDebouncedProjectDecision(key, intent);
     return false;
   }
   intent.applying = true;
-  if (!setProjectDecision(key, intent.marker)) {
-    finishDebouncedProjectDecision(key, intent, false);
-    return false;
+  intent.trailingReady = false;
+  while (true) {
+    if (!debouncedProjectDecisionIsCurrent(key, intent)) {
+      finishDebouncedProjectDecision(key, intent, false);
+      return false;
+    }
+    const appliedMarker = intent.marker;
+    if (!setProjectDecision(key, appliedMarker)) {
+      finishDebouncedProjectDecision(key, intent, false);
+      return false;
+    }
+    const accepted = await waitForShareWrite(key);
+    if (!accepted) {
+      finishDebouncedProjectDecision(key, intent, false);
+      return false;
+    }
+
+    if (stableJson(intent.marker) === stableJson(appliedMarker)) {
+      finishDebouncedProjectDecision(key, intent, true);
+      return true;
+    }
+
+    // A successful echo of our in-flight value is the base for the queued
+    // latest edit. Preserve the original stage/connection guards so external
+    // transitions cannot make that queued edit appear current.
+    if (!seamlessState.ready || seamlessState.status !== 'live'
+      || seamlessState.projectStage !== intent.stageAtIssue
+      || structureConnectionRevision !== intent.connectionAtIssue
+      || stableJson(currentSnapshot()[key]) !== stableJson(appliedMarker)) {
+      finishDebouncedProjectDecision(key, intent, false);
+      return false;
+    }
+    const cell = decisionCell(key);
+    const currentMarker = cell?.marker;
+    intent.revisionAtIssue = Number.isSafeInteger(currentMarker) ? currentMarker as number : 0;
+    intent.baseValue = stableJson(currentSnapshot()[key]);
+
+    if (intent.trailingReady) {
+      intent.trailingReady = false;
+      continue;
+    }
+
+    // The trailing debounce has not elapsed yet. Leave the shared promise
+    // pending; its timer will re-enter this function with the latest marker.
+    intent.applying = false;
+    return intent.promise;
   }
-  const accepted = await waitForShareWrite(key);
-  finishDebouncedProjectDecision(key, intent, accepted);
-  return accepted;
 }
 
 export function setProjectDecisionDebounced(
@@ -466,7 +528,20 @@ export function setProjectDecisionDebounced(
   const cell = decisionCell(key);
   if (!cell || cell.readonly) return Promise.resolve(false);
   const current = debouncedProjectDecisions.get(key);
-  if (current?.applying) return current.promise;
+  if (current?.applying) {
+    if (stableJson(current.marker) !== stableJson(marker)) {
+      current.marker = marker;
+      current.trailingReady = false;
+      if (current.timer !== undefined) clearTimeout(current.timer);
+      current.timer = setTimeout(() => {
+        current.timer = undefined;
+        current.trailingReady = true;
+        if (!current.applying) void applyDebouncedProjectDecision(key, current);
+      }, Math.max(0, delayMs));
+      markPendingInput(key);
+    }
+    return current.promise;
+  }
   cancelDebouncedProjectDecision(key, current);
 
   let resolve!: (accepted: boolean) => void;
@@ -481,6 +556,7 @@ export function setProjectDecisionDebounced(
     promise,
     resolve,
     applying: false,
+    trailingReady: false,
   };
   markPendingInput(key);
   debouncedProjectDecisions.set(key, intent);
@@ -678,6 +754,15 @@ function refreshComputedFreshness(): void {
     const expected = currentComputedEcho(key);
     freshness[key] = seamlessState.ready && received.has(key) && echoIsFresh(valueEcho(key), expected);
   }
+  const pending = new Set(seamlessState.pendingInputs);
+  freshness.gaussian_scores = freshness.gaussian_scores === true
+    && !pending.has('best_fit_clip') && !pending.has('stacking_selection');
+  freshness.gaussian_validation = freshness.gaussian_validation === true
+    && !pending.has('gaussian_classes') && !pending.has('best_fit_clip')
+    && !pending.has('stacking_selection');
+  freshness.refe_validation = freshness.refe_validation === true
+    && !pending.has('threshold_edits') && !pending.has('best_fit_clip')
+    && !pending.has('stacking_selection');
   const reduced = computedValue('range_pdbs_aa');
   freshness.range_pdbs_aa = seamlessState.ready && received.has('range_pdbs_aa')
     && !!reduced && typeof reduced === 'object'
@@ -825,7 +910,7 @@ function receiveDecision(key: Exclude<DecisionKey, 'ranges'>, value: SharedValue
   const parsed = parseMarkerValue(value, key);
   const valid = parsed !== undefined && markerIsWellFormed(key, parsed);
   received.add(key);
-  if (valid) clearPendingInput(key);
+  if (valid && !hasNewerDebouncedDecision(key, parsed)) clearPendingInput(key);
   recordDecision(key, valid ? parsed : null);
   if (!valid) {
     seamlessState.decisionErrors[key] = `The stored ${key.replaceAll('_', ' ')} decision is invalid; review it before continuing.`;
@@ -845,6 +930,21 @@ function receiveComputed(key: ShareKey, value: SharedValue): void {
     seamlessState.structureIdReady = true;
   }
   refreshComputedFreshness();
+  updateReady();
+}
+
+function hasSharedCell(key: ShareKey, keys: string[]): boolean {
+  const cell = client?.[key];
+  return !!cell && (keys.includes(key) || (typeof cell.url === 'string' && cell.url.length > 0));
+}
+
+async function readInitialComputedShares(keys: string[]): Promise<void> {
+  const available = computedShareKeys.filter(key => hasSharedCell(key, keys) && !!client?.[key]?.url);
+  const results = await Promise.allSettled(available.map(readShareFresh));
+  const failed = results.filter(result => result.status === 'rejected').length;
+  if (failed > 0) {
+    seamlessState.syncNotice = `Could not read ${failed} computed shared value${failed === 1 ? '' : 's'} on connect.`;
+  }
   updateReady();
 }
 
@@ -1066,7 +1166,7 @@ function receiveStackingSelection(value: SharedValue, marker?: number): void {
 }
 
 function attachShare(key: ShareKey, keys: string[]): void {
-  if (!keys.includes(key)) return;
+  if (!hasSharedCell(key, keys)) return;
   const cell = client?.[key];
   if (!cell) return;
   const install = (handler: (value: SharedValue) => void) => {
@@ -1195,7 +1295,7 @@ async function resynchronizeShares(keys: string[]): Promise<void> {
     'best_fit_thresholds', 'best_fits', 'energetics', 'energy_thresholds', 'interactions',
     'bestfit_stackings', 'gaussian_validation', 'refe_validation', 'gaussian_scores',
   ];
-  const tasks = ordered.filter(key => keys.includes(key)).map(readShareFresh);
+  const tasks = ordered.filter(key => hasSharedCell(key, keys)).map(readShareFresh);
   if (pendingStructureCommit && keys.includes('cif.cif')) tasks.push(readPendingCifFresh());
   const results = await Promise.allSettled(tasks);
   const failed = results.filter(result => result.status === 'rejected').length;
@@ -1288,12 +1388,15 @@ function attachShareContext(context: ShareContext): void {
     ] as const) attachShare(key, keys);
     const cifCell = context['cif.cif'];
     if (cifCell) cifCell.onchange = value => { if (!resyncInProgress) receiveCifCommit(value); };
-    if (!requiredEditShares.every(key => keys.includes(key))
-      || !requiredComputedShares.every(key => keys.includes(key))) {
+    if (!requiredEditShares.every(key => hasSharedCell(key, keys))
+      || !requiredComputedShares.every(key => hasSharedCell(key, keys))) {
       seamlessState.status = 'waiting-for-shares';
     }
     if (reconnect && context.self.ws) void resynchronizeShares(keys);
-    else resyncInProgress = false;
+    else {
+      resyncInProgress = false;
+      void readInitialComputedShares(keys);
+    }
   };
 }
 

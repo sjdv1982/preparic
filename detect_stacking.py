@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-def _detect_stacking(range_pdbs: list[str], ring_references: dict | None = None) -> list[dict]:
+def _detect_stacking(
+    range_pdbs: list[str],
+    ring_references: dict | None = None,
+    include_all_pairs: bool = False,
+) -> list[dict]:
     """Return deterministic RNA--protein ring pairs from range PDB text.
 
     ``range_pdbs[0]`` is the RNA structure and subsequent entries are protein
@@ -65,11 +69,20 @@ def _detect_stacking(range_pdbs: list[str], ring_references: dict | None = None)
             raise ValueError("ring atoms do not define a finite plane")
         return normal / norm
 
+    def fit_rotation(source: np.ndarray, target: np.ndarray) -> np.ndarray:
+        """Return the row-vector Kabsch rotation used by A7's descriptor frame."""
+        source_centered = source - source.mean(axis=0)
+        target_centered = target - target.mean(axis=0)
+        left, _, right = np.linalg.svd(source_centered.T @ target_centered)
+        if np.linalg.det(left) * np.linalg.det(right) < 0:
+            left[:, -1] *= -1
+        return left @ right
+
     reference_coordinates = {}
 
-    def fitted_reference_normal(coordinates: np.ndarray, atom_names: tuple[str, ...], resname: str) -> np.ndarray:
+    def fitted_reference_frame(coordinates: np.ndarray, atom_names: tuple[str, ...], resname: str):
         if ring_references is None:
-            return fit_plane_normal(coordinates)
+            return fit_plane_normal(coordinates), None, None
         # These are the reference aliases used by Alaric's Gaussian geometry
         # contract: the purine ring fit uses A coordinates for G, pyrimidine
         # U uses C, and TYR uses PHE. The target atom names stay unchanged.
@@ -93,23 +106,26 @@ def _detect_stacking(range_pdbs: list[str], ring_references: dict | None = None)
                 reference_residue = next(reference_model.get_residues(), None) if reference_model else None
                 if reference_residue is None:
                     raise ValueError("the reference has no residue")
+                reference_atom_names = sorted(
+                    atom_names, key=lambda name: reference_residue[name].serial_number
+                )
                 reference_coordinates[reference_name] = np.asarray(
-                    [reference_residue[name].coord for name in atom_names], dtype=float
+                    [reference_residue[name].coord for name in reference_atom_names], dtype=np.float32
                 )
             except Exception as exc:
                 raise ValueError(f"ring reference {reference_name} is invalid: {exc}") from exc
         reference = reference_coordinates[reference_name]
-        centered_reference = reference - reference.mean(axis=0)
-        centered_observed = coordinates - coordinates.mean(axis=0)
-        left, _, right = np.linalg.svd(centered_reference.T @ centered_observed)
-        correction = np.eye(3)
-        correction[-1, -1] = np.linalg.det(left @ right)
-        row_rotation = left @ correction @ right
-        normal = np.linalg.svd(centered_reference, full_matrices=False)[2][-1] @ row_rotation
+        reference_to_world = fit_rotation(reference, coordinates)
+        world_to_reference = fit_rotation(coordinates, reference)
+        # A7 defines the normal as the reference frame's z axis after the
+        # Kabsch fit. Using the geometric least-squares plane normal differs
+        # slightly because the reference ring coordinates are not perfectly
+        # planar; that was the source of the T18/A9 theta mismatch.
+        normal = np.asarray([0.0, 0.0, 1.0], dtype=np.float32) @ reference_to_world
         norm = float(np.linalg.norm(normal))
         if not math.isfinite(norm) or norm == 0:
             raise ValueError(f"ring reference {reference_name} does not define a finite plane")
-        return normal / norm
+        return normal / norm, reference_to_world, world_to_reference
 
     def complete_rings(model, allowed_resnames: frozenset[str]):
         rings_found = []
@@ -121,16 +137,22 @@ def _detect_stacking(range_pdbs: list[str], ring_references: dict | None = None)
             if not all(atom_name in residue for atom_name in atom_names):
                 continue
 
+            atom_names_in_pdb_order = sorted(
+                atom_names, key=lambda name: residue[name].serial_number
+            )
             coordinates = np.asarray(
-                [residue[atom_name].coord for atom_name in atom_names], dtype=float
+                [residue[atom_name].coord for atom_name in atom_names_in_pdb_order], dtype=np.float32
             )
             if not np.isfinite(coordinates).all():
                 raise ValueError(
                     f"residue {resname} {residue.id[1]} has non-finite coordinates"
                 )
             centroid = coordinates.mean(axis=0)
-            normal = fitted_reference_normal(coordinates, atom_names, resname)
-            rings_found.append((resname, int(residue.id[1]), centroid, normal))
+            normal, reference_to_world, world_to_reference = fitted_reference_frame(
+                coordinates, tuple(atom_names_in_pdb_order), resname
+            )
+            rings_found.append((resname, int(residue.id[1]), centroid, normal,
+                                reference_to_world, world_to_reference))
         return rings_found
 
     def clamp_unit(value: float) -> float:
@@ -147,6 +169,25 @@ def _detect_stacking(range_pdbs: list[str], ring_references: dict | None = None)
         normal_component = abs(float(np.dot(displacement, protein_normal)))
         distance = float(np.linalg.norm(displacement))
         return math.degrees(math.acos(clamp_unit(normal_component / distance)))
+
+    def descriptors(displacement, rna_frame, protein_frame, rna_normal, protein_normal):
+        rna_to_world, rna_to_reference = rna_frame
+        protein_to_world, _protein_to_reference = protein_frame
+        if rna_to_world is None or protein_to_world is None or rna_to_reference is None:
+            distance = float(np.linalg.norm(displacement))
+            tilt = acute_angle_degrees(float(np.dot(protein_normal, rna_normal)))
+            phi = slip_angle_degrees(displacement, protein_normal)
+            return distance, phi, tilt
+        # Keep the same float32 PDB coordinates, Kabsch direction, and matrix
+        # order as A9 so the backend density matches its independent score.
+        actual_rotation = rna_to_reference.T @ protein_to_world.T
+        actual_translation = displacement @ protein_to_world.T
+        distance = float(np.linalg.norm(actual_translation))
+        if distance == 0:
+            return distance, float("nan"), float("nan")
+        phi = math.degrees(math.acos(clamp_unit(abs(float(actual_translation[2])) / distance)))
+        tilt = math.degrees(math.acos(clamp_unit(abs(float(actual_rotation[2, 2])))))
+        return distance, phi, tilt
 
     if not isinstance(range_pdbs, list):
         raise ValueError("range_pdbs must be provided as a list of PDB strings")
@@ -184,19 +225,23 @@ def _detect_stacking(range_pdbs: list[str], ring_references: dict | None = None)
             protein_resid,
             protein_centroid,
             protein_normal,
+            protein_to_world,
+            protein_to_reference,
         ) in protein_ring_values:
-            for rna_resname, rna_resid, rna_centroid, rna_normal in rna_ring_values:
+            for (rna_resname, rna_resid, rna_centroid, rna_normal,
+                 rna_to_world, rna_to_reference) in rna_ring_values:
                 displacement = rna_centroid - protein_centroid
-                distance = float(np.linalg.norm(displacement))
+                distance, slip_angle, tilt_angle = descriptors(
+                    displacement, (rna_to_world, rna_to_reference),
+                    (protein_to_world, protein_to_reference), rna_normal, protein_normal,
+                )
                 if distance == 0:
                     continue
-                tilt_angle = acute_angle_degrees(
-                    float(np.dot(protein_normal, rna_normal))
-                )
-                if distance > max_centroid_distance + distance_boundary_tolerance:
-                    continue
-                if tilt_angle > max_plane_tilt + angle_boundary_tolerance:
-                    continue
+                if not include_all_pairs:
+                    if distance > max_centroid_distance + distance_boundary_tolerance:
+                        continue
+                    if tilt_angle > max_plane_tilt + angle_boundary_tolerance:
+                        continue
                 results.append(
                     {
                         "rna_resname": rna_resname,
@@ -205,9 +250,7 @@ def _detect_stacking(range_pdbs: list[str], ring_references: dict | None = None)
                         "protein_resid": protein_resid,
                         "distance": distance,
                         "tilt_angle": tilt_angle,
-                        "slip_angle": slip_angle_degrees(
-                            displacement, protein_normal
-                        ),
+                        "slip_angle": slip_angle,
                         "rna_centroid": [float(value) for value in rna_centroid],
                         "protein_centroid": [
                             float(value) for value in protein_centroid

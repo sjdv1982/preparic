@@ -4,6 +4,7 @@
   import Stage3Stackings from './components/Stage3Stackings.svelte';
   import Stage4BestFits from './components/Stage4BestFits.svelte';
   import Stage5Energetics from './components/Stage5Energetics.svelte';
+  import Stage6Gaussian from './components/Stage6Gaussian.svelte';
   import Viewer from './components/Viewer.svelte';
   import { clearStructureDependentState, enterStage2, enterStage3, appState, invalidateStackingState, returnToStage1, returnToStage2 } from './lib/state.svelte';
   import { cancelSharedCifWrite, deactivateProjectDecisionAndWait, prepareProjectTransition, seamlessState, setEnergyThresholdEditsAwaited, setProjectDecisionAwaited, setSharedBiounitIndex, setSharedCif, setSharedPdbCode, setSharedRangeRows, setSharedStackingSelectionAndWait, waitForShareWrite } from './lib/seamless.svelte';
@@ -13,6 +14,7 @@
   import { canContinueStage4, canEnterStage4, clipForSelectedAnchors, makeThresholdSkeleton, selectedCandidateFragments, validateThresholdEdits } from './lib/stage4';
   import { adaptInteractionMatrix, candidateAnchors, makeInteractionMatrix, recomputeInteractionMatrix, reconcileEnergyThresholdEdits, stage5CanAdvance, stage5Rows, type Stage5S14 } from './lib/stage5';
   import { markerIsWellFormed } from './lib/project-state';
+  import { classMarkerForContinue, selectedGaussianKeys } from './lib/stage6';
   import type { ChainKey, PickInfo, RangeRow, RangeSpec } from './lib/types';
   import type { MolViewer } from './lib/molstar/viewer';
 
@@ -441,6 +443,10 @@
     return await deactivateProjectDecisionAndWait('interaction_matrix');
   }
 
+  async function backToStage5(): Promise<boolean> {
+    return await deactivateProjectDecisionAndWait('gaussian_classes');
+  }
+
   async function continueToStage6(): Promise<boolean> {
     const snapshot = seamlessState.projectSnapshot;
     const inventory = seamlessState.computed.fragments;
@@ -451,17 +457,11 @@
     const anchors = rows ? candidateAnchors(
       inventory, snapshot.stacking_selection, seamlessState.computed.stackings, rows,
     ) : null;
-    const classes = snapshot.gaussian_classes;
-    const selected = snapshot.stacking_selection && typeof snapshot.stacking_selection === 'object'
-      && 'selected' in snapshot.stacking_selection && snapshot.stacking_selection.selected
-      && typeof snapshot.stacking_selection.selected === 'object'
-      ? Object.keys(snapshot.stacking_selection.selected as Record<string, boolean>)
-        .filter(key => (snapshot.stacking_selection as any).selected[key] === true).sort() : [];
-    const classRowsMatch = markerIsWellFormed('gaussian_classes', classes)
-      && classes && typeof classes === 'object' && 'basis' in classes
-      && JSON.stringify([...(classes.basis as string[])].sort()) === JSON.stringify(selected);
+    const selected = selectedGaussianKeys(snapshot.stacking_selection);
     const validatorFailed = seamlessState.stateGraphErrors.some(issue =>
       issue.name === 'validate_energy_threshold_edits' && issue.state === 'failed');
+    const gaussianBackendFailed = seamlessState.stateGraphErrors.some(issue =>
+      ['detect_stacking_bestfit', 'gaussian_scores_transformer'].includes(issue.name) && issue.state === 'failed');
     const gate = stage5CanAdvance(snapshot, {
       ready: seamlessState.ready && seamlessState.status === 'live',
       stage: seamlessState.projectStage,
@@ -469,7 +469,7 @@
       bestFitsFresh: seamlessState.computedFreshness.best_fits === true,
       geometryFresh: seamlessState.computedFreshness.bestfit_stackings === true,
       gaussianFresh: seamlessState.computedFreshness.gaussian_scores === true,
-      gaussianClassesValid: !!classRowsMatch,
+      gaussianBackendFailed,
       validatorFailed,
       fragments: inventory,
       rangeRows,
@@ -478,8 +478,11 @@
       energetics: seamlessState.computed.energetics,
       energyEdits: seamlessState.energyThresholdEdits,
     });
-    if (!gate.allowed || !classRowsMatch || !classes || typeof classes !== 'object') return false;
-    return await setProjectDecisionAwaited('gaussian_classes', { ...classes, active: true });
+    if (!gate.allowed) return false;
+    const marker = classMarkerForContinue(
+      snapshot.gaussian_classes, seamlessState.computed.gaussian_scores, selected,
+    );
+    return marker ? await setProjectDecisionAwaited('gaussian_classes', marker) : false;
   }
 
   $effect(() => {
@@ -675,6 +678,8 @@
         <Stage4BestFits onBack={backToStackings} onContinue={continueToStage5} />
       {:else if appState.stage === 5}
         <Stage5Energetics onBack={backToStage4} onContinue={continueToStage6} />
+      {:else if appState.stage === 6}
+        <Stage6Gaussian onBack={backToStage5} />
       {:else}
         <section class="stage-content" aria-live="polite">
           <div class="eyebrow">Stage {appState.stage}</div>

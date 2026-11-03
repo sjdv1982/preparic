@@ -46,6 +46,11 @@ export interface ThresholdMarker {
   bases: ThresholdBase[];
 }
 
+/** Copy a JSON decision marker while removing reactive proxies from its object graph. */
+export function cloneThresholdMarker(marker: ThresholdMarker): ThresholdMarker {
+  return JSON.parse(JSON.stringify(marker)) as ThresholdMarker;
+}
+
 export interface ClipMarker {
   schema: 1;
   basis: FragmentInventory['echo'] | null;

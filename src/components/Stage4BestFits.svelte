@@ -2,6 +2,7 @@
   import { seamlessState, setProjectDecision, setProjectDecisionDebounced } from '../lib/seamless.svelte';
   import { appState } from '../lib/state.svelte';
   import {
+    cloneThresholdMarker,
     copyComputedThresholds,
     canContinueStage4,
     selectedCandidateFragments,
@@ -27,7 +28,7 @@
   $effect(() => {
     const marker = seamlessState.projectSnapshot.threshold_edits;
     if (record(marker) && marker.active === true) {
-      edits = structuredClone(marker) as ThresholdMarker;
+      edits = cloneThresholdMarker(marker as ThresholdMarker);
     }
   });
 
@@ -113,7 +114,7 @@
       message = 'The shared threshold table rejected this edit.';
       return false;
     }
-    edits = structuredClone(next);
+    edits = cloneThresholdMarker(next);
     message = '';
     return true;
   }
@@ -126,7 +127,7 @@
       message = 'Enter a finite positive value with at most two decimal places.';
       return;
     }
-    const next = structuredClone(edits);
+    const next = cloneThresholdMarker(edits);
     Object.assign(next[group][index], { [key]: nextValue });
     save(next);
   }
@@ -135,7 +136,7 @@
     if (!edits || !computedFresh) return;
     const source = computedValue(edits[group][index] as Record<string, any>, key);
     if (source === null) return;
-    const next = structuredClone(edits);
+    const next = cloneThresholdMarker(edits);
     Object.assign(next[group][index], { [key]: source });
     save(next);
   }

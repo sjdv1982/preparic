@@ -76,7 +76,7 @@ def pinned_cli_transformer(
             relative = path.relative_to(root)
         except ValueError as exc:
             raise ValueError(f"Dependency {path} is outside Alaric's repository root.") from exc
-        if relative.parts[0] not in {"util", "alaric", "fraglib", "attract-jax"}:
+        if relative.parts[0] not in {"util", "alaric", "fraglib", "attract-jax", "ring-refe"}:
             raise ValueError(f"Unexpected Alaric dependency location {relative}.")
         if relative.parts[0] == "fraglib" and len(relative.parts) > 1:
             destination = Path(*relative.parts)
@@ -183,26 +183,91 @@ cp energies.json ../RESULT/energetics.json
     )
 
 
-def energy_threshold_module_code(alaric_dir: str | Path) -> tuple[dict, dict]:
-    """Return Alaric's stdlib rounding module and its decimal helper."""
+def gaussian_check_transformer(alaric_dir: str | Path, fraglib_config: Path):
+    """Build T21, the class-independent all-filter A9 invocation."""
     root = resolve_alaric_repo_root(alaric_dir)
-    return {
-        "type": "interpreted",
-        "language": "python",
-        "code": (root / "alaric" / "energy_threshold.py").read_text(encoding="utf-8"),
-    }, {
-        "type": "interpreted",
-        "language": "python",
-        "code": (root / "alaric" / "threshold_rounding.py").read_text(encoding="utf-8"),
-    }
+    command = f"""mkdir -p RESULT work
+cp jobs_json work/jobs.json
+cp -a best_fit work/best_fit
+cp -a proteins work/proteins
+cp exclude_code work/exclude_code
+cp fraglib_identities work/fraglib_identities.json
+cp semantic_identity work/semantic-identity.json
+cp fraglib.yaml work/fraglib.yaml
+cd work
+export fraglib_config="$(pwd)/fraglib.yaml"
+python -B util/gaussian-check.py --jobs jobs.json \\
+  --best-fit best_fit --proteins proteins \\
+  --exclude-code "$(cat exclude_code)" \\
+  --fraglib-identities fraglib_identities.json \\
+  --semantic-identity semantic-identity.json \\
+  --repo-root {shlex.quote(str(root))} \\
+  --output ../RESULT/gaussian-check.json
+"""
+    return pinned_cli_transformer(
+        alaric_dir,
+        "gaussian-check.py.DEPS.txt",
+        command,
+        {
+            "jobs_json": "str",
+            "best_fit": "folder",
+            "proteins": "folder",
+            "exclude_code": "str",
+            "fraglib_identities": "str",
+            "semantic_identity": "str",
+        },
+        conda_environment="alaric",
+        meta_file=fraglib_config,
+    )
+
+
+def energy_threshold_module_code(alaric_dir: str | Path) -> dict:
+    """Return a self-contained interpreted copy of Alaric's energy threshold module."""
+    root = resolve_alaric_repo_root(alaric_dir)
+    source = (root / "alaric" / "energy_threshold.py").read_text(encoding="utf-8")
+    rounding = (root / "alaric" / "threshold_rounding.py").read_text(encoding="utf-8")
+
+    # Interpreted Seamless modules cannot import sibling attachments. Inline
+    # the authoritative rounding source so the T16 worker needs no checkout or
+    # package-relative module lookup.
+    dependency_start = source.find("\ntry:\n")
+    body_start = source.find("\n\ndef energy_threshold", dependency_start)
+    if dependency_start < 0 or body_start < 0:
+        raise ValueError("Alaric's energy_threshold.py import block or function marker changed.")
+    rounding_body = rounding.replace("from __future__ import annotations\n", "", 1)
+    energy_threshold = (
+        source[:dependency_start]
+        + "\n\n"
+        + rounding_body
+        + "\n\n"
+        + source[body_start + 2 :]
+    )
+    return {"type": "interpreted", "language": "python", "code": energy_threshold}
 
 
 def threshold_module_code(alaric_dir: str | Path) -> tuple[dict, dict]:
     root = resolve_alaric_repo_root(alaric_dir)
     thresholds = (root / "util" / "refe-thresholds.py").read_text(encoding="utf-8")
     rounding = (root / "alaric" / "threshold_rounding.py").read_text(encoding="utf-8")
+
+    # T8's interpreted module loader does not resolve imports made by an
+    # attached module against sibling attachments. Inline the authoritative
+    # rounding source into refe_thresholds so its import fallback never needs
+    # a checkout-relative __file__ path in the worker sandbox.
+    dependency_start = thresholds.find("\ntry:\n")
+    body_start = thresholds.find("\n\nPAIR_COLUMNS =", dependency_start)
+    if dependency_start < 0 or body_start < 0:
+        raise ValueError("Alaric's refe-thresholds.py import block or body marker changed.")
+    rounding_body = rounding.replace("from __future__ import annotations\n", "", 1)
+    refe_thresholds = (
+        thresholds[:dependency_start]
+        + "\n\n"
+        + rounding_body
+        + "\n\n"
+        + thresholds[body_start + 2 :]
+    )
     return (
-        {"type": "interpreted", "language": "python", "code": thresholds},
+        {"type": "interpreted", "language": "python", "code": refe_thresholds},
         {"type": "interpreted", "language": "python", "code": rounding},
     )
 

@@ -1,0 +1,86 @@
+"""Focused regressions for interpreted W7 runtime dependencies."""
+
+import inspect
+import sys
+import types
+import builtins
+
+import backend
+
+
+def test_best_fit_threshold_bundle_is_self_contained_without_file_or_sibling_import(monkeypatch):
+    modules = backend.threshold_module_code(backend.resolve_alaric_dir())
+    refe_source = modules[0]["code"]
+    original_import = builtins.__import__
+
+    def reject_sibling_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "threshold_rounding":
+            raise AssertionError("the interpreted T8 module must not import a sibling attachment")
+        return original_import(name, globals, locals, fromlist, level)
+
+    module = types.ModuleType("refe_thresholds")
+    module.__dict__["__builtins__"] = dict(vars(builtins), __import__=reject_sibling_import)
+    assert "from threshold_rounding import" not in refe_source
+    assert "Path(__file__)" not in refe_source
+    exec(compile(refe_source, "<refe_thresholds>", "exec"), module.__dict__)
+    monkeypatch.setitem(sys.modules, "refe_thresholds", module)
+    monkeypatch.delitem(sys.modules, "threshold_rounding", raising=False)
+
+    namespace = {}
+    exec(compile(inspect.getsource(backend.thresholds_from_tables), "<threshold-transform>", "exec"), namespace)
+
+    pair_table = (
+        "down\tup\tsequence\tovRMSD\tcRMSD\n"
+        "1\t2\tAC\t0.10\t0.20\n"
+    ).encode()
+    base_table = (
+        "fragment\tsequence\tnucleotide1_ovRMSD\tnucleotide2_ovRMSD\n"
+        "1\tAC\t0.10\t0.20\n"
+    ).encode()
+    result = namespace["thresholds_from_tables"](
+        {"pairs.tsv": pair_table, "bases.tsv": base_table}, {"fit": "ready"}
+    )
+
+    assert result["pairs"][0]["ovrmsd"] == "0.11"
+    assert result["bases"][0]["nuc1_ovrmsd"] == "0.11"
+    assert result["echo"] == {"fit": "ready"}
+
+
+def test_gaussian_jobs_json_is_self_contained_as_an_interpreted_transformer():
+    namespace = {}
+    exec(compile(inspect.getsource(backend._stage6_jobs_json), "<jobs-json-transform>", "exec"), namespace)
+
+    assert namespace["_stage6_jobs_json"]({"jobs": [{"key": "anchor-A"}]}) == '[{"key":"anchor-A"}]'
+
+
+def test_energy_threshold_transformer_bundle_inlines_rounding_without_sibling_import(monkeypatch):
+    import stage5 as preparic_stage5
+
+    energy_source = backend.energy_threshold_module_code(backend.resolve_alaric_dir())["code"]
+    original_import = builtins.__import__
+
+    def reject_rounding_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name in {"threshold_rounding", ".threshold_rounding"}:
+            raise AssertionError("T16 must not import an unattached sibling module")
+        return original_import(name, globals, locals, fromlist, level)
+
+    module = types.ModuleType("energy_threshold")
+    module.__dict__["__builtins__"] = dict(vars(builtins), __import__=reject_rounding_import)
+    exec(compile(energy_source, "<energy_threshold>", "exec"), module.__dict__)
+    monkeypatch.setitem(sys.modules, "energy_threshold", module)
+    monkeypatch.setitem(sys.modules, "preparic_stage5", preparic_stage5)
+    monkeypatch.delitem(sys.modules, "threshold_rounding", raising=False)
+
+    namespace = {}
+    exec(compile(inspect.getsource(backend._stage5_energy_thresholds), "<energy-threshold-transform>", "exec"), namespace)
+    best_fits = {"echo": {"fit": "current"}}
+    energetics = {
+        "schema": 1,
+        "echo": {"best_fits": best_fits["echo"]},
+        "ranges": [{"range": "range-2", "rows": [{
+            "key": "frag-1-GU", "bestfit": {"energy": -1.234, "error": None},
+        }]}],
+    }
+
+    result = namespace["_stage5_energy_thresholds"](energetics, best_fits)
+    assert result["values"] == {"frag-1-GU": {"range-2": "-1.23"}}

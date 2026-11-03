@@ -26,6 +26,7 @@ from alaric_runtime import (
     best_fit_tables_transformer,
     energy_threshold_module_code,
     energetics_range_transformer,
+    gaussian_check_transformer,
     fragment_library_identities,
     refe_fragments_transformer,
     threshold_module_code,
@@ -547,6 +548,7 @@ def _stage5_energetics_ligands(refe_fragments: dict, best_fit: dict, fragments: 
 def _stage5_merge_energetics(
     range_results: dict, range_specs: dict, best_fits: dict, fragments: dict,
 ) -> dict:
+    import json
     import preparic_stage5
     decoded = {}
     for name, payload in range_results.items():
@@ -576,7 +578,7 @@ def _reconcile_stage5_range_scorers(context: Context, alaric_dir: Path, stop: th
                 setattr(context, name, energetics_range_transformer(alaric_dir))
                 scorer = getattr(context, name)
                 scorer.pins.ligands = context.energetics_ligands.result
-                scorer.pins.receptor = context.protein_pdbs[f"range-{index}-aa.pdb"]
+                scorer.pins.receptor = context.protein_pdbs.result[f"range-{index}-aa.pdb"]
                 scorer.celltypes.ligands = "folder"
                 scorer.celltypes.receptor = "bytes"
                 scorer.celltypes.result = "folder"
@@ -615,10 +617,97 @@ def _stage5_interaction_handoff(
     stackings: object,
     clip: object,
     range_specs: object,
-) -> dict:
+) -> dict | None:
     import preparic_stage5
     return preparic_stage5.interaction_handoff(
         matrix, fragments, selection, stackings, clip, range_specs
+    )
+
+
+def _stage6_detect_stacking_bestfit(
+    best_fits: object, proteins: object, fragments: object, range_specs: object,
+    ring_ref_a: object, ring_ref_c: object, ring_ref_phe: object,
+    ring_ref_his: object, ring_ref_arg: object, ring_ref_trp: object,
+) -> dict | None:
+    import preparic_stage6
+    return preparic_stage6.detect_stacking_bestfit(
+        best_fits, proteins, fragments, range_specs,
+        ring_ref_a, ring_ref_c, ring_ref_phe, ring_ref_his, ring_ref_arg, ring_ref_trp,
+    )
+
+
+def _stage6_gaussian_check_jobs(
+    best_fits: object, fragments: object, stackings: object,
+    selection: object, clip: object,
+) -> dict | None:
+    import preparic_stage6
+    return preparic_stage6.gaussian_check_jobs(best_fits, fragments, stackings, selection, clip)
+
+
+def _stage6_validate_gaussian_classes(
+    marker: object, model_json: object, selection: object,
+) -> None:
+    import preparic_stage6
+    import alaric_gaussian_filter
+    return preparic_stage6.validate_gaussian_classes(
+        marker, model_json, selection, alaric_gaussian_filter,
+    )
+
+
+def _stage6_semantic_gaussian_identity(model_json: object) -> str:
+    import preparic_stage6
+    return preparic_stage6.semantic_gaussian_identity(model_json)
+
+
+def _stage6_jobs_json(jobs_result: object) -> str | None:
+    import json
+
+    if jobs_result is None:
+        return None
+    if type(jobs_result) is not dict or not isinstance(jobs_result.get("jobs"), list):
+        raise ValueError("T20 Gaussian job list is malformed.")
+    return json.dumps(jobs_result["jobs"], sort_keys=True, separators=(",", ":"))
+
+
+def _stage6_read_gaussian_check(result_folder: object) -> dict:
+    import preparic_stage6
+    return preparic_stage6.read_gaussian_check_result(result_folder)
+
+
+def _stage6_merge_gaussian_validation(
+    check_result: object, jobs_result: object, class_marker: object,
+    selection: object, clip: object, best_fits: object, model_json: object,
+    class_validation: object,
+) -> dict | None:
+    import preparic_stage6
+    import alaric_gaussian_filter
+    if class_validation is not None:
+        raise ValueError("Gaussian class validation did not return its success sentinel.")
+    return preparic_stage6.merge_gaussian_validation(
+        check_result, jobs_result, class_marker, selection, clip, best_fits,
+        model_json, alaric_gaussian_filter,
+    )
+
+
+def _stage6_validate_refe_anchors(
+    threshold_edits: object, best_fit_thresholds: object, fragments: object,
+    stackings: object, selection: object, clip: object, best_fits: object,
+) -> dict | None:
+    import preparic_stage6
+    return preparic_stage6.validate_refe_anchors(
+        threshold_edits, best_fit_thresholds, fragments, stackings, selection, clip, best_fits,
+    )
+
+
+def _stage6_gaussian_scores(
+    bestfit_stackings: object, reference_stackings: object, selection: object,
+    clip: object, fragments: object, model_json: object,
+) -> dict | None:
+    import preparic_stage6
+    import alaric_gaussian_filter
+    return preparic_stage6.gaussian_scores(
+        bestfit_stackings, reference_stackings, selection, clip, fragments,
+        model_json, alaric_gaussian_filter,
     )
 
 
@@ -937,11 +1026,10 @@ def build_context() -> Context:
         context.merge_energetics.celltypes.result = "plain"
         context.energetics = context.merge_energetics.result
 
-        energy_threshold_code, threshold_rounding_code = energy_threshold_module_code(alaric_dir)
+        energy_threshold_code = energy_threshold_module_code(alaric_dir)
         context.energy_thresholds_transformer = _stage5_energy_thresholds
         context.energy_thresholds_transformer.modules.preparic_stage5 = stage5_module
         context.energy_thresholds_transformer.modules.energy_threshold = energy_threshold_code
-        context.energy_thresholds_transformer.modules.threshold_rounding = threshold_rounding_code
         context.energy_thresholds_transformer.pins.energetics = context.energetics
         context.energy_thresholds_transformer.pins.best_fits = context.best_fits
         context.energy_thresholds_transformer.celltypes.energetics = "plain"
@@ -972,6 +1060,153 @@ def build_context() -> Context:
         context.interaction_handoff.celltypes.result = "plain"
         context.interactions = context.interaction_handoff.result
 
+        # W7 stage 6: keep A7 private to the backend and publish only the
+        # scores, computed classes and validation payloads consumed by the UI.
+        context.gaussian_model_json = Cell(celltype="bytes")
+        context.gaussian_model_json.mount(
+            alaric_root / "alaric" / "gaussian_stacking_filter.json", mode="r"
+        )
+        gaussian_model_json = context.gaussian_model_json
+        stage6_module = {
+            "type": "interpreted",
+            "language": "python",
+            "code": (PROJECT_ROOT / "stage6.py").read_text(encoding="utf-8"),
+        }
+        gaussian_filter_module = {
+            "type": "interpreted",
+            "language": "python",
+            "code": (alaric_root / "alaric" / "gaussian_filter.py").read_text(encoding="utf-8"),
+        }
+        detector_module = {
+            "type": "interpreted",
+            "language": "python",
+            "code": (PROJECT_ROOT / "detect_stacking.py").read_text(encoding="utf-8"),
+        }
+        ring_cells = {
+            "ring_ref_a": context.ring_refe_a,
+            "ring_ref_c": context.ring_refe_c,
+            "ring_ref_phe": context.ring_refe_phe,
+            "ring_ref_his": context.ring_refe_his,
+            "ring_ref_arg": context.ring_refe_arg,
+            "ring_ref_trp": context.ring_refe_trp,
+        }
+
+        context.detect_stacking_bestfit = _stage6_detect_stacking_bestfit
+        context.detect_stacking_bestfit.modules.preparic_stage6 = stage6_module
+        context.detect_stacking_bestfit.modules.preparic_detect_stacking = detector_module
+        for pin, cell in {
+            "best_fits": context.best_fits,
+            "proteins": context.protein_pdbs,
+            "fragments": context.fragments,
+            "range_specs": context.range_specs,
+            **ring_cells,
+        }.items():
+            context.detect_stacking_bestfit.pins[pin] = cell
+        context.detect_stacking_bestfit.celltypes.best_fits = "plain"
+        context.detect_stacking_bestfit.celltypes.proteins = "folder"
+        context.detect_stacking_bestfit.celltypes.fragments = "plain"
+        context.detect_stacking_bestfit.celltypes.range_specs = "plain"
+        for pin in ring_cells:
+            context.detect_stacking_bestfit.celltypes[pin] = "bytes"
+        context.detect_stacking_bestfit.celltypes.result = "plain"
+        context.bestfit_stackings = context.detect_stacking_bestfit.result
+
+        context.validate_gaussian_classes = _stage6_validate_gaussian_classes
+        context.validate_gaussian_classes.modules.preparic_stage6 = stage6_module
+        context.validate_gaussian_classes.modules.alaric_gaussian_filter = gaussian_filter_module
+        context.validate_gaussian_classes.pins.marker = context.gaussian_classes
+        context.validate_gaussian_classes.pins.model_json = gaussian_model_json
+        context.validate_gaussian_classes.pins.selection = context.stacking_selection
+        context.validate_gaussian_classes.celltypes.marker = "plain"
+        context.validate_gaussian_classes.celltypes.model_json = "bytes"
+        context.validate_gaussian_classes.celltypes.selection = "plain"
+        context.validate_gaussian_classes.celltypes.result = "plain"
+
+        context.gaussian_check_jobs = _stage6_gaussian_check_jobs
+        context.gaussian_check_jobs.modules.preparic_stage6 = stage6_module
+        context.gaussian_check_jobs.pins.best_fits = context.best_fits
+        context.gaussian_check_jobs.pins.fragments = context.fragments
+        context.gaussian_check_jobs.pins.stackings = context.stackings
+        context.gaussian_check_jobs.pins.selection = context.stacking_selection
+        context.gaussian_check_jobs.pins.clip = context.best_fit_clip
+        for pin in ("best_fits", "fragments", "stackings", "selection", "clip"):
+            context.gaussian_check_jobs.celltypes[pin] = "plain"
+        context.gaussian_check_jobs.celltypes.result = "plain"
+
+        context.gaussian_semantic_identity = _stage6_semantic_gaussian_identity
+        context.gaussian_semantic_identity.modules.preparic_stage6 = stage6_module
+        context.gaussian_semantic_identity.pins.model_json = gaussian_model_json
+        context.gaussian_semantic_identity.celltypes.model_json = "bytes"
+        context.gaussian_semantic_identity.celltypes.result = "text"
+
+        context.gaussian_check_job_json = _stage6_jobs_json
+        context.gaussian_check_job_json.pins.jobs_result = context.gaussian_check_jobs.result
+        context.gaussian_check_job_json.celltypes.jobs_result = "plain"
+        context.gaussian_check_job_json.celltypes.result = "text"
+
+        context.gaussian_check_transformer = gaussian_check_transformer(
+            alaric_dir, Path.home() / ".alaric" / "fraglib.yaml"
+        )
+        context.gaussian_check_transformer.pins.jobs_json = context.gaussian_check_job_json.result
+        context.gaussian_check_transformer.pins.best_fit = context.best_fit.result
+        context.gaussian_check_transformer.pins.proteins = context.protein_pdbs
+        context.gaussian_check_transformer.pins.exclude_code = context.exclude_pdb_code
+        context.gaussian_check_transformer.pins.fraglib_identities = context.fraglib_identities
+        context.gaussian_check_transformer.pins.semantic_identity = context.gaussian_semantic_identity.result
+
+        context.gaussian_check = _stage6_read_gaussian_check
+        context.gaussian_check.modules.preparic_stage6 = stage6_module
+        context.gaussian_check.pins.result_folder = context.gaussian_check_transformer.result
+        context.gaussian_check.celltypes.result_folder = "folder"
+        context.gaussian_check.celltypes.result = "plain"
+
+        context.gaussian_scores_transformer = _stage6_gaussian_scores
+        context.gaussian_scores_transformer.modules.preparic_stage6 = stage6_module
+        context.gaussian_scores_transformer.modules.alaric_gaussian_filter = gaussian_filter_module
+        context.gaussian_scores_transformer.pins.bestfit_stackings = context.bestfit_stackings
+        context.gaussian_scores_transformer.pins.reference_stackings = context.stackings
+        context.gaussian_scores_transformer.pins.selection = context.stacking_selection
+        context.gaussian_scores_transformer.pins.clip = context.best_fit_clip
+        context.gaussian_scores_transformer.pins.fragments = context.fragments
+        context.gaussian_scores_transformer.pins.model_json = gaussian_model_json
+        for pin in ("bestfit_stackings", "reference_stackings", "selection", "clip", "fragments"):
+            context.gaussian_scores_transformer.celltypes[pin] = "plain"
+        context.gaussian_scores_transformer.celltypes.model_json = "bytes"
+        context.gaussian_scores_transformer.celltypes.result = "plain"
+        context.gaussian_scores = context.gaussian_scores_transformer.result
+
+        context.merge_gaussian_validation = _stage6_merge_gaussian_validation
+        context.merge_gaussian_validation.modules.preparic_stage6 = stage6_module
+        context.merge_gaussian_validation.modules.alaric_gaussian_filter = gaussian_filter_module
+        context.merge_gaussian_validation.pins.check_result = context.gaussian_check
+        context.merge_gaussian_validation.pins.jobs_result = context.gaussian_check_jobs.result
+        context.merge_gaussian_validation.pins.class_marker = context.gaussian_classes
+        context.merge_gaussian_validation.pins.selection = context.stacking_selection
+        context.merge_gaussian_validation.pins.clip = context.best_fit_clip
+        context.merge_gaussian_validation.pins.best_fits = context.best_fits
+        context.merge_gaussian_validation.pins.model_json = gaussian_model_json
+        context.merge_gaussian_validation.pins.class_validation = context.validate_gaussian_classes
+        for pin in ("check_result", "jobs_result", "class_marker", "selection", "clip", "best_fits"):
+            context.merge_gaussian_validation.celltypes[pin] = "plain"
+        context.merge_gaussian_validation.celltypes.model_json = "bytes"
+        context.merge_gaussian_validation.celltypes.class_validation = "plain"
+        context.merge_gaussian_validation.celltypes.result = "plain"
+        context.gaussian_validation = context.merge_gaussian_validation.result
+
+        context.validate_refe_anchors = _stage6_validate_refe_anchors
+        context.validate_refe_anchors.modules.preparic_stage6 = stage6_module
+        context.validate_refe_anchors.pins.threshold_edits = context.threshold_edits
+        context.validate_refe_anchors.pins.best_fit_thresholds = context.best_fit_thresholds
+        context.validate_refe_anchors.pins.fragments = context.fragments
+        context.validate_refe_anchors.pins.stackings = context.stackings
+        context.validate_refe_anchors.pins.selection = context.stacking_selection
+        context.validate_refe_anchors.pins.clip = context.best_fit_clip
+        context.validate_refe_anchors.pins.best_fits = context.best_fits
+        for pin in ("threshold_edits", "best_fit_thresholds", "fragments", "stackings", "selection", "clip", "best_fits"):
+            context.validate_refe_anchors.celltypes[pin] = "plain"
+        context.validate_refe_anchors.celltypes.result = "plain"
+        context.refe_validation = context.validate_refe_anchors.result
+
         context.pdbcode.share(readonly=False)
         context.biounit.share(readonly=False)
         context.cif.share(path="cif.cif", readonly=False)
@@ -980,18 +1215,37 @@ def build_context() -> Context:
         context.stackings.share()
         context.range_pdbs_aa.share(path="range_pdbs_aa")
         context.fragments.share(path="fragments")
-        context.reference_fragment_pdbs.share(path="reference-fragments.json")
-        context.best_fit_thresholds.share(path="best-fit-thresholds.json")
-        context.best_fits.share(path="best-fits.json")
+        context.reference_fragment_pdbs.share()
+        context.best_fit_thresholds.mount(
+            MOUNT_DIRECTORY / "best-fit-thresholds.json", mode="w", authority="cell"
+        )
+        context.best_fit_thresholds.share()
+        context.best_fits.share()
         context.stacking_selection.share(readonly=False)
         context.threshold_edits.share(readonly=False)
         context.best_fit_clip.share(readonly=False)
         context.interaction_matrix.share(readonly=False)
         context.gaussian_classes.share(readonly=False)
         context.energy_threshold_edits.share(readonly=False)
-        context.energetics.share(path="energetics.json")
-        context.energy_thresholds.share(path="computed-energy-thresholds.json")
-        context.interactions.share(path="interactions.json")
+        context.energetics.share()
+        context.energy_thresholds.mount(
+            MOUNT_DIRECTORY / "computed-energy-thresholds.json", mode="w", authority="cell"
+        )
+        context.energy_thresholds.share()
+        context.interactions.mount(
+            MOUNT_DIRECTORY / "interactions.json", mode="w", authority="cell"
+        )
+        context.interactions.share()
+        context.bestfit_stackings.share()
+        context.gaussian_validation.mount(
+            MOUNT_DIRECTORY / "gaussian-validation.json", mode="w", authority="cell"
+        )
+        context.gaussian_validation.share()
+        context.refe_validation.mount(
+            MOUNT_DIRECTORY / "refe-validation.json", mode="w", authority="cell"
+        )
+        context.refe_validation.share()
+        context.gaussian_scores.share()
         context.structure_id_result.share(path="structure_id")
         context.mounts.sync(timeout=60)
         global _STAGE5_RANGE_SYNC_STOP, _STAGE5_RANGE_SYNC_THREAD

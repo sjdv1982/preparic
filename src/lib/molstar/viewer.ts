@@ -41,42 +41,51 @@ interface PreparedPdbSource {
   componentRef: any;
   representationRef: any;
 }
-const StackingConnectorShape = StateTransformer.builderFactory('preparic')({
-  name: 'stacking-centroid-connectors',
-  display: 'Stacking Centroid Connectors',
-  from: SO.Root,
-  to: SO.Shape.Provider,
-  params: { segments: PD.Value([] as DashSegment[], { isHidden: true }) },
-})({
-  apply({ params }) {
-    const meshState = MeshBuilder.createState();
-    meshState.currentGroup = 0;
-    for (const segment of params.segments) {
-      addSimpleCylinder(meshState, MolVec3.create(...segment.start), MolVec3.create(...segment.end), {
-        radiusTop: 0.045,
-        radiusBottom: 0.045,
-        radialSegments: 8,
-      });
-    }
-    const mesh = MeshBuilder.getMesh(meshState);
-    return new SO.Shape.Provider({
-      label: 'Stacking centroid connectors',
-      data: mesh,
-      params: Mesh.Params,
-      getShape: (_ctx, geometry) => Shape.create(
-        'Stacking centroid connectors',
-        geometry,
-        geometry,
-        () => Color(0xf4b942),
-        () => 1,
-        () => 'Centroid-to-centroid stacking interaction',
-        undefined,
-        1,
-      ),
-      geometryUtils: Mesh.Utils,
-    }, { label: 'Stacking centroid connectors' });
-  },
-});
+function createStackingConnectorShapeTransformer() {
+  return StateTransformer.builderFactory('preparic')({
+    name: 'stacking-centroid-connectors',
+    display: 'Stacking Centroid Connectors',
+    from: SO.Root,
+    to: SO.Shape.Provider,
+    params: { segments: PD.Value([] as DashSegment[], { isHidden: true }) },
+  })({
+    apply({ params }) {
+      const meshState = MeshBuilder.createState();
+      meshState.currentGroup = 0;
+      for (const segment of params.segments) {
+        addSimpleCylinder(meshState, MolVec3.create(...segment.start), MolVec3.create(...segment.end), {
+          radiusTop: 0.045,
+          radiusBottom: 0.045,
+          radialSegments: 8,
+        });
+      }
+      const mesh = MeshBuilder.getMesh(meshState);
+      return new SO.Shape.Provider({
+        label: 'Stacking centroid connectors',
+        data: mesh,
+        params: Mesh.Params,
+        getShape: (_ctx, geometry) => Shape.create(
+          'Stacking centroid connectors',
+          geometry,
+          geometry,
+          () => Color(0xf4b942),
+          () => 1,
+          () => 'Centroid-to-centroid stacking interaction',
+          undefined,
+          1,
+        ),
+        geometryUtils: Mesh.Utils,
+      }, { label: 'Stacking centroid connectors' });
+    },
+  });
+}
+
+let stackingConnectorShapeTransformer: ReturnType<typeof createStackingConnectorShapeTransformer> | undefined;
+
+function getStackingConnectorShapeTransformer() {
+  stackingConnectorShapeTransformer ??= createStackingConnectorShapeTransformer();
+  return stackingConnectorShapeTransformer;
+}
 
 export class MolViewer {
   readonly plugin: PluginContext;
@@ -843,7 +852,7 @@ export class MolViewer {
     if (segments.length === 0) return;
     await this.plugin.state.data.build()
       .toRoot()
-      .apply(StackingConnectorShape, { segments }, { tags: [RENDER_TAG] })
+      .apply(getStackingConnectorShapeTransformer(), { segments }, { tags: [RENDER_TAG] })
       .apply(ShapeRepresentation3D, {}, { tags: [RENDER_TAG] })
       .commit();
   }
