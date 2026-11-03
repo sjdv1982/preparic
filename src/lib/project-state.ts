@@ -349,13 +349,19 @@ export interface DeferredWriteGuard {
   live: boolean;
   revisionAtIssue: number;
   currentRevision: number;
+  connectionAtIssue?: number;
+  currentConnection?: number;
 }
 
 /** Deferred edits belong to their original stage and cell revision. */
 export function deferredWriteIsCurrent(guard: DeferredWriteGuard): boolean {
+  const connectionMatches = guard.connectionAtIssue === undefined && guard.currentConnection === undefined
+    || Number.isSafeInteger(guard.connectionAtIssue)
+      && guard.connectionAtIssue === guard.currentConnection;
   return guard.live && guard.stageAtIssue === guard.currentStage
     && Number.isSafeInteger(guard.revisionAtIssue)
-    && guard.revisionAtIssue === guard.currentRevision;
+    && guard.revisionAtIssue === guard.currentRevision
+    && connectionMatches;
 }
 
 export interface StateGraphNode {
@@ -407,4 +413,3 @@ export function visibleTransformerErrors(options: TransformerErrorOptions): Visi
 // Keep the list visible to runtime callers that need to validate names without
 // accepting aliases from historical plans (T17 and S16 were removed).
 export const ACTIVE_TRANSFORMER_NAMES = Object.freeze(Object.keys(TRANSFORMER_STAGE));
-

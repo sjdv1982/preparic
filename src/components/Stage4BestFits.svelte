@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { seamlessState, setProjectDecision, setProjectDecisionAwaited } from '../lib/seamless.svelte';
+  import { seamlessState, setProjectDecision, setProjectDecisionDebounced } from '../lib/seamless.svelte';
   import { appState } from '../lib/state.svelte';
   import {
     copyComputedThresholds,
@@ -12,7 +12,7 @@
     type ThresholdMarker,
   } from '../lib/stage4';
 
-  let { onBack }: { onBack: () => void } = $props();
+  let { onBack }: { onBack: () => Promise<boolean> } = $props();
   let edits = $state<ThresholdMarker | null>(null);
   let message = $state('');
   let clip1Draft = $state('0');
@@ -134,6 +134,10 @@
   }
 
   function saveClip(): void {
+    if (seamlessState.pendingInputs.includes('best_fit_clip')) {
+      message = 'Wait for the current clip change to finish before applying another.';
+      return;
+    }
     if (!candidatesFresh) {
       message = 'Wait for fresh stacking and fragment results before changing the clip.';
       return;
@@ -152,20 +156,14 @@
     const basis = inventory?.echo;
     if (!basis) return;
     const next: ClipMarker = { schema: 1, basis, clip1: first, clip2: last };
-    if (!setProjectDecision('best_fit_clip', next)) {
-      message = 'The shared clip was rejected.';
-      return;
-    }
-    message = '';
+    message = 'Applying the clip change…';
+    void setProjectDecisionDebounced('best_fit_clip', next, 500).then(accepted => {
+      message = accepted ? '' : 'The clip change was dropped because the shared project changed. Review the accepted clip and try again.';
+    });
   }
 
   async function leaveStage(): Promise<void> {
-    if (!edits) return;
-    if (!await setProjectDecisionAwaited('threshold_edits', { ...edits, active: false })) {
-      message = 'The threshold table could not be saved before leaving stage 4.';
-      return;
-    }
-    onBack();
+    if (!await onBack()) message = 'The threshold table could not be deactivated before leaving stage 4.';
   }
 
   function isWarning(value: string | null): boolean {
@@ -193,9 +191,9 @@
   {:else}
     <div class="stage4-toolbar">
       <div class="stage4-clip-controls">
-        <label>Clip 5′ <input aria-label="Clip fragments from 5 prime end" inputmode="numeric" value={clip1Draft} onchange={event => clip1Draft = event.currentTarget.value} /></label>
-        <label>Clip 3′ <input aria-label="Clip fragments from 3 prime end" inputmode="numeric" value={clip2Draft} onchange={event => clip2Draft = event.currentTarget.value} /></label>
-        <button class="button button-secondary" onclick={saveClip}>Apply clip</button>
+        <label>Clip 5′ <input aria-label="Clip fragments from 5 prime end" inputmode="numeric" value={clip1Draft} onchange={event => clip1Draft = event.currentTarget.value} disabled={seamlessState.pendingInputs.includes('best_fit_clip')} /></label>
+        <label>Clip 3′ <input aria-label="Clip fragments from 3 prime end" inputmode="numeric" value={clip2Draft} onchange={event => clip2Draft = event.currentTarget.value} disabled={seamlessState.pendingInputs.includes('best_fit_clip')} /></label>
+        <button class="button button-secondary" onclick={saveClip} disabled={seamlessState.pendingInputs.includes('best_fit_clip')}>Apply clip</button>
       </div>
       <div class="stage4-copy-controls">
         <span>{computedFresh ? `${diffCount} cells differ from computed` : 'Computed thresholds pending'}</span>

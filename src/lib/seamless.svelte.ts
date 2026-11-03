@@ -105,6 +105,20 @@ interface PendingShareWrite {
   promise: Promise<boolean>;
   resolve: (accepted: boolean) => void;
 }
+
+type DebouncedDecisionKey = 'best_fit_clip' | 'gaussian_classes';
+
+interface DebouncedProjectDecision {
+  marker: unknown;
+  stageAtIssue: ProjectStage;
+  connectionAtIssue: number;
+  revisionAtIssue: number;
+  baseValue: string;
+  timer: ReturnType<typeof setTimeout> | undefined;
+  promise: Promise<boolean>;
+  resolve: (accepted: boolean) => void;
+  applying: boolean;
+}
 export type ShareConnector = (
   updateServer?: ShareAddress,
   restServer?: ShareAddress,
@@ -170,6 +184,7 @@ let pendingPdbCode: string | undefined;
 let pendingStructureCommit: StructureCommit | undefined;
 const pendingShareWrites = new Map<string, PendingShareWrite>();
 const latestWriteRevisions = new Map<string, number>();
+const debouncedProjectDecisions = new Map<DebouncedDecisionKey, DebouncedProjectDecision>();
 const shareReceivers = new Map<ShareKey, (value: SharedValue) => void>();
 let nextWriteRevision = 0;
 let resyncInProgress = false;
@@ -259,6 +274,7 @@ function refreshProjectStage(): void {
   seamlessState.projectStage = deriveProjectStage(currentSnapshot());
   appState.stage = seamlessState.projectStage;
   refreshVisibleErrors();
+  cancelStaleDebouncedProjectDecisions();
 }
 
 function recordDecision(key: DecisionKey, value: unknown): void {
@@ -356,6 +372,121 @@ export function waitForShareWrite(key: string): Promise<boolean> {
   return pendingShareWrites.get(key)?.promise ?? Promise.resolve(true);
 }
 
+function debouncedProjectDecisionIsCurrent(key: DebouncedDecisionKey, intent: DebouncedProjectDecision): boolean {
+  const cell = decisionCell(key);
+  const currentRevision = Number.isSafeInteger(cell?.marker) ? cell?.marker as number : 0;
+  return deferredWriteIsCurrent({
+    stageAtIssue: intent.stageAtIssue,
+    currentStage: seamlessState.projectStage,
+    live: seamlessState.ready && seamlessState.status === 'live',
+    revisionAtIssue: intent.revisionAtIssue,
+    currentRevision,
+    connectionAtIssue: intent.connectionAtIssue,
+    currentConnection: structureConnectionRevision,
+  }) && stableJson(currentSnapshot()[key]) === intent.baseValue;
+}
+
+function finishDebouncedProjectDecision(
+  key: DebouncedDecisionKey,
+  intent: DebouncedProjectDecision,
+  accepted: boolean,
+): void {
+  if (debouncedProjectDecisions.get(key) === intent) {
+    debouncedProjectDecisions.delete(key);
+    clearPendingInput(key);
+  }
+  intent.resolve(accepted);
+}
+
+function cancelDebouncedProjectDecision(
+  key: DebouncedDecisionKey,
+  intent: DebouncedProjectDecision | undefined = debouncedProjectDecisions.get(key),
+): void {
+  if (!intent || intent.applying) return;
+  if (intent.timer !== undefined) clearTimeout(intent.timer);
+  if (debouncedProjectDecisions.get(key) === intent) {
+    debouncedProjectDecisions.delete(key);
+    clearPendingInput(key);
+  }
+  intent.resolve(false);
+}
+
+function cancelStaleDebouncedProjectDecisions(): void {
+  for (const [key, intent] of debouncedProjectDecisions) {
+    if (!intent.applying && !debouncedProjectDecisionIsCurrent(key, intent)) {
+      cancelDebouncedProjectDecision(key, intent);
+    }
+  }
+}
+
+async function applyDebouncedProjectDecision(
+  key: DebouncedDecisionKey,
+  intent: DebouncedProjectDecision,
+): Promise<boolean> {
+  if (debouncedProjectDecisions.get(key) !== intent) return false;
+  if (intent.applying) return intent.promise;
+  intent.timer = undefined;
+  if (!debouncedProjectDecisionIsCurrent(key, intent)) {
+    cancelDebouncedProjectDecision(key, intent);
+    return false;
+  }
+  intent.applying = true;
+  if (!setProjectDecision(key, intent.marker)) {
+    finishDebouncedProjectDecision(key, intent, false);
+    return false;
+  }
+  const accepted = await waitForShareWrite(key);
+  finishDebouncedProjectDecision(key, intent, accepted);
+  return accepted;
+}
+
+export function setProjectDecisionDebounced(
+  key: DebouncedDecisionKey,
+  marker: unknown,
+  delayMs = 500,
+): Promise<boolean> {
+  const requiredStage = key === 'best_fit_clip' ? 4 : 6;
+  if (!markerIsWellFormed(key, marker) || !seamlessState.ready || seamlessState.status !== 'live'
+    || seamlessState.projectStage !== requiredStage) {
+    return Promise.resolve(false);
+  }
+  const cell = decisionCell(key);
+  if (!cell || cell.readonly) return Promise.resolve(false);
+  const current = debouncedProjectDecisions.get(key);
+  if (current?.applying) return current.promise;
+  cancelDebouncedProjectDecision(key, current);
+
+  let resolve!: (accepted: boolean) => void;
+  const promise = new Promise<boolean>(done => { resolve = done; });
+  const intent: DebouncedProjectDecision = {
+    marker,
+    stageAtIssue: seamlessState.projectStage,
+    connectionAtIssue: structureConnectionRevision,
+    revisionAtIssue: Number.isSafeInteger(cell.marker) ? cell.marker as number : 0,
+    baseValue: stableJson(currentSnapshot()[key]),
+    timer: undefined,
+    promise,
+    resolve,
+    applying: false,
+  };
+  markPendingInput(key);
+  debouncedProjectDecisions.set(key, intent);
+  intent.timer = setTimeout(() => { void applyDebouncedProjectDecision(key, intent); }, Math.max(0, delayMs));
+  return promise;
+}
+
+/** Flush a queued debounced decision before a dependent transition. */
+export function flushDebouncedProjectDecision(key: DebouncedDecisionKey): Promise<boolean> {
+  const intent = debouncedProjectDecisions.get(key);
+  if (!intent) return waitForShareWrite(key);
+  if (intent.timer !== undefined) clearTimeout(intent.timer);
+  return applyDebouncedProjectDecision(key, intent);
+}
+
+export function cancelQueuedProjectDecision(key: DebouncedDecisionKey): void {
+  cancelDebouncedProjectDecision(key);
+}
+
 function refreshVisibleErrors(): void {
   seamlessState.stateGraphErrors = visibleTransformerErrors({
     stage: seamlessState.projectStage,
@@ -402,6 +533,7 @@ function suspendForDisconnect(): void {
   structureConnectionRevision += 1;
   seamlessState.ready = false;
   seamlessState.status = 'disconnected';
+  cancelStaleDebouncedProjectDecisions();
   seamlessState.computedFreshness = {};
   seamlessState.structureIdReady = false;
   seamlessState.hasInitialStateGraph = false;
@@ -1136,6 +1268,7 @@ function attachShareContext(context: ShareContext): void {
 
 export function connectToSeamless(connect: ShareConnector): void {
   structureConnectionRevision += 1;
+  for (const key of [...debouncedProjectDecisions.keys()]) cancelDebouncedProjectDecision(key);
   structureShareRevisions = { pdbcode: 0, cif: 0 };
   for (const key of [...pendingShareWrites.keys()]) resolvePendingShareWrite(key, false);
   pendingShareWrites.clear();
@@ -1403,6 +1536,10 @@ export function setSharedRangeRows(rows: RangeRow[]): boolean {
 
 export function setProjectDecision(key: DecisionKey, marker: unknown): boolean {
   if (!markerIsWellFormed(key, marker)) return false;
+  if ((key === 'best_fit_clip' || key === 'gaussian_classes')
+    && !debouncedProjectDecisions.get(key)?.applying) {
+    cancelDebouncedProjectDecision(key);
+  }
   const current = seamlessState.projectSnapshot[key];
   if (stableJson(current) === stableJson(marker)) return true;
   if (!writeDecision(key, marker)) {

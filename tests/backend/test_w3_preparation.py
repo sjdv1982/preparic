@@ -13,6 +13,7 @@ from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 
 from range_pdbs import _ranges_to_pdb
 from alaric_dir import resolve_alaric_dir, resolve_alaric_repo_root
+from alaric_runtime import best_fit_tables_transformer
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -262,3 +263,13 @@ def test_real_preparation_preserves_rna_ids_and_is_accepted_without_lenient_flag
     ], cwd=tmp_path, capture_output=True, text=True)
     assert strict.returncode == 0, strict.stdout + strict.stderr
     assert len(list((tmp_path / "fragments").glob("frag-*-refe.pdb"))) == 3
+
+
+def test_t7_materializes_meta_fraglib_config_under_runtime_filename(tmp_path):
+    config = tmp_path / "fraglib.yaml"
+    config.write_text("fraglib: test\n", encoding="utf-8")
+    transformer = best_fit_tables_transformer(resolve_alaric_dir(), config)
+    command = transformer.code.content.decode("utf-8")
+
+    assert "cp fraglib.yaml work/fraglib.yaml" in command
+    assert "cp META__FILE__fraglib.yaml" not in command

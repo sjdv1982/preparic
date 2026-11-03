@@ -141,14 +141,14 @@ python -B util/refe-fragments.py rna.pdb --templates fraglib/templates --output 
 def best_fit_tables_transformer(alaric_dir: str | Path, fraglib_config: Path):
     command = """cp rna_pdb work/rna.pdb
 cp fraglib_identities work/fraglib_identities.json
-cp META__FILE__fraglib.yaml work/fraglib.yaml
+cp fraglib.yaml work/fraglib.yaml
 cp -a best_fit work/best_fit
 cd work
-python -B util/refe-best-fit-tables.py best_fit/best-fits.tsv rna.pdb \\
-  --exclude-pdb-code \"$(cat ../exclude_pdb_code)\" \\
-  --fraglib-identities fraglib_identities.json \\
-  --fraglib-config fraglib.yaml \\
-  --templates-dir fraglib/templates \\
+python -B util/refe-best-fit-tables.py best_fit/best-fits.tsv rna.pdb \
+  --exclude-pdb-code "$(cat ../exclude_pdb_code)" \
+  --fraglib-identities fraglib_identities.json \
+  --fraglib-config fraglib.yaml \
+  --templates-dir fraglib/templates \
   --output ../RESULT"""
     return pinned_cli_transformer(
         alaric_dir,

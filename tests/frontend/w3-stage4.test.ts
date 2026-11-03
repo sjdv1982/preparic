@@ -7,6 +7,7 @@ import {
 import { stackingKey } from '../../src/lib/stackings';
 import { createRangeRow, validateRows } from '../../src/lib/ranges';
 import { nameChains } from '../../src/lib/chains';
+import { deferredWriteIsCurrent } from '../../src/lib/project-state';
 
 const rna = { chain: 'A', start: 101, end: 104 };
 const basis = { pdbcode: '1B7F', rna };
@@ -18,6 +19,31 @@ const fragments: any = {
   adjacent_pairs: [{ down: 1, up: 2, sequence: 'ACG' }, { down: 2, up: 3, sequence: 'CGU' }],
 };
 const clip = { schema: 1 as const, basis, clip1: 0, clip2: 0 };
+
+describe('W3 deferred clip writes', () => {
+  const current = {
+    stageAtIssue: 4 as const,
+    currentStage: 4 as const,
+    live: true,
+    revisionAtIssue: 8,
+    currentRevision: 8,
+    connectionAtIssue: 3,
+    currentConnection: 3,
+  };
+
+  it('admits an unchanged live clip intent', () => {
+    expect(deferredWriteIsCurrent(current)).toBe(true);
+  });
+
+  it.each([
+    { currentStage: 3 as const },
+    { live: false },
+    { currentRevision: 9 },
+    { currentConnection: 4 },
+  ])('drops a clip intent after %j', change => {
+    expect(deferredWriteIsCurrent({ ...current, ...change })).toBe(false);
+  });
+});
 
 function stacking(resid: number, distance = 5, slip = 59.999, tilt = 89) {
   return { rna_resname: 'C', rna_resid: resid, protein_range_pdb_id: 2, protein_resid: 30,
