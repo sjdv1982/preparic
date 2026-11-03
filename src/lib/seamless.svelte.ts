@@ -7,6 +7,7 @@ import {
   echoIsFresh,
   markerIsWellFormed,
   markerMatchesUpstream,
+  energyThresholdEditsIsWellFormed,
   visibleTransformerErrors,
   type ProjectSnapshot,
   type ProjectStage,
@@ -15,6 +16,7 @@ import type { RangeRow, Stacking } from './types';
 
 export type SharedValue = string | Blob | null | undefined;
 type DecisionKey = 'ranges' | 'stacking_selection' | 'threshold_edits' | 'best_fit_clip' | 'interaction_matrix' | 'gaussian_classes';
+type DecisionDiagnosticKey = DecisionKey | 'energy_threshold_edits';
 type ShareKey = 'pdbcode' | 'biounit' | 'ranges' | 'range_specs' | 'stackings' | 'stacking_selection'
   | 'threshold_edits' | 'best_fit_clip' | 'interaction_matrix' | 'gaussian_classes' | 'energy_threshold_edits'
   | 'structure_id' | 'range_pdbs_aa' | 'fragments' | 'best_fit_thresholds' | 'best_fits' | 'energetics'
@@ -145,7 +147,7 @@ export const seamlessState = $state({
     interaction_matrix: null,
     gaussian_classes: null,
   } as ProjectSnapshot,
-  decisionErrors: {} as Partial<Record<DecisionKey, string>>,
+  decisionErrors: {} as Partial<Record<DecisionDiagnosticKey, string>>,
   stateGraphErrors: [] as Array<{ name: string; state: string; message: string }>,
   hasInitialStateGraph: false,
   pendingInputs: [] as string[],
@@ -158,6 +160,7 @@ export const seamlessState = $state({
   computedFreshness: {} as Partial<Record<ShareKey, boolean>>,
   pdbCode: '',
   biounitIndex: 1,
+  energyThresholdEdits: null as unknown,
   pdbCodePendingWrite: false,
   biounitIndexPendingWrite: false,
   rangesReady: false,
@@ -224,6 +227,16 @@ function parseJsonValue(value: SharedValue): unknown | undefined {
     return JSON.parse(value) as unknown;
   } catch {
     return value;
+  }
+}
+
+function parseEnergyThresholdEdits(value: SharedValue): unknown | undefined {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string') return undefined;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
   }
 }
 
@@ -656,16 +669,18 @@ function refreshComputedFreshness(): void {
     'bestfit_stackings', 'gaussian_scores', 'gaussian_validation', 'refe_validation', 'range_pdbs_aa',
   ];
   const freshness: Partial<Record<ShareKey, boolean>> = {};
-  freshness.structure_id = seamlessState.ready
+  freshness.structure_id = seamlessState.ready && received.has('structure_id')
     && computedValue('structure_id') === seamlessState.pdbCode && !!seamlessState.pdbCode;
   const currentRanges = currentRangeSpecs();
-  freshness.range_specs = seamlessState.ready && stableJson(computedValue('range_specs')) === stableJson(currentRanges);
+  freshness.range_specs = seamlessState.ready && received.has('range_specs')
+    && stableJson(computedValue('range_specs')) === stableJson(currentRanges);
   for (const key of keys) {
     const expected = currentComputedEcho(key);
-    freshness[key] = seamlessState.ready && echoIsFresh(valueEcho(key), expected);
+    freshness[key] = seamlessState.ready && received.has(key) && echoIsFresh(valueEcho(key), expected);
   }
   const reduced = computedValue('range_pdbs_aa');
-  freshness.range_pdbs_aa = !!reduced && typeof reduced === 'object'
+  freshness.range_pdbs_aa = seamlessState.ready && received.has('range_pdbs_aa')
+    && !!reduced && typeof reduced === 'object'
     && echoIsFresh((reduced as { range_specs?: unknown }).range_specs, currentRanges)
     && (reduced as { pdb_code?: unknown }).pdb_code === seamlessState.pdbCode.toLowerCase();
   seamlessState.computedFreshness = freshness;
@@ -782,8 +797,8 @@ function receiveRanges(value: SharedValue): void {
   seamlessState.rangesReady = true;
   received.add('ranges');
   if (valid) clearPendingInput('ranges');
-  else seamlessState.decisionErrors.ranges = seamlessState.rangeError;
   recordDecision('ranges', marker);
+  if (!valid) seamlessState.decisionErrors.ranges = seamlessState.rangeError;
   const rows = marker && typeof marker === 'object' && 'rows' in marker && Array.isArray(marker.rows)
     ? marker.rows.map((row, index) => ({
         id: `shared-${index + 1}`,
@@ -811,8 +826,10 @@ function receiveDecision(key: Exclude<DecisionKey, 'ranges'>, value: SharedValue
   const valid = parsed !== undefined && markerIsWellFormed(key, parsed);
   received.add(key);
   if (valid) clearPendingInput(key);
-  else seamlessState.decisionErrors[key] = `The stored ${key.replaceAll('_', ' ')} decision is invalid; review it before continuing.`;
   recordDecision(key, valid ? parsed : null);
+  if (!valid) {
+    seamlessState.decisionErrors[key] = `The stored ${key.replaceAll('_', ' ')} decision is invalid; review it before continuing.`;
+  }
   refreshComputedFreshness();
   updateReady();
 }
@@ -1027,7 +1044,9 @@ function receiveStackingSelection(value: SharedValue, marker?: number): void {
 
   if (selection === null) {
     pendingBackendStackingSelection = undefined;
-    seamlessState.stackingSelectionError = parsed === null ? '' : 'The shared stacking selection decision is invalid.';
+    const error = parsed === null ? '' : 'The shared stacking selection decision is invalid.';
+    seamlessState.stackingSelectionError = error;
+    if (error) seamlessState.decisionErrors.stacking_selection = error;
     return;
   }
   const appliesToCurrentRanges = selection !== null
@@ -1080,8 +1099,13 @@ function attachShare(key: ShareKey, keys: string[]): void {
       break;
     case 'energy_threshold_edits':
       install(value => {
-        seamlessState.computed.energy_threshold_edits = parseJsonValue(value) ?? null;
+        const parsed = parseEnergyThresholdEdits(value);
+        const valid = parsed !== undefined && energyThresholdEditsIsWellFormed(parsed);
+        seamlessState.energyThresholdEdits = valid ? parsed : null;
         received.add(key);
+        if (valid) delete seamlessState.decisionErrors.energy_threshold_edits;
+        else seamlessState.decisionErrors.energy_threshold_edits =
+          'The stored energy threshold edits are invalid; review the stage-5 decision before continuing.';
         updateReady();
       });
       break;
@@ -1289,6 +1313,7 @@ export function connectToSeamless(connect: ShareConnector): void {
   seamlessState.computed = {};
   seamlessState.computedFreshness = {};
   seamlessState.decisionErrors = {};
+  seamlessState.energyThresholdEdits = null;
   seamlessState.rangeError = '';
   seamlessState.stackingSelectionError = '';
   seamlessState.stackingSelectionReady = false;

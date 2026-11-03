@@ -18,6 +18,22 @@
   const startupAutoContinue = startupQuery.get('continue') === '1';
   let startupPdbIdForRestore = $state<string | null>(null);
 
+  const decisionErrorStage: Record<string, number> = {
+    ranges: 2,
+    stacking_selection: 3,
+    threshold_edits: 4,
+    best_fit_clip: 4,
+    interaction_matrix: 5,
+    energy_threshold_edits: 5,
+    gaussian_classes: 6,
+  };
+
+  function decisionErrorIsVisible(key: string): boolean {
+    if (key === 'energy_threshold_edits') return appState.stage === 5 || appState.stage === 6;
+    const stage = decisionErrorStage[key];
+    return stage !== undefined && stage <= appState.stage + 1;
+  }
+
   let seamlessStateInitialized = false;
   let startupStageRestoreHandled = false;
   let startupPdbApplied = false;
@@ -515,6 +531,9 @@
       {#if seamlessState.syncNotice}
         <div class="viewer-error" role="alert"><strong>Project synchronization</strong><span>{seamlessState.syncNotice}</span></div>
       {/if}
+      {#each Object.entries(seamlessState.decisionErrors).filter(([key]) => decisionErrorIsVisible(key)) as [key, message] (`${key}:${message}`)}
+        <div class="viewer-error" role="alert"><strong>Stored decision unavailable</strong><span>{message}</span></div>
+      {/each}
       {#each seamlessState.stateGraphErrors as issue (`${issue.name}:${issue.state}:${issue.message}`)}
         <div class="viewer-error" role="alert"><strong>{issue.name} {issue.state}</strong><span>{issue.message}</span></div>
       {/each}

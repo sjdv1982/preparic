@@ -243,6 +243,28 @@ function validClasses(value: unknown): boolean {
   return isUnique(keys) && sameValue([...keys].sort(), [...value.basis].sort());
 }
 
+/** Strict read validator for the stage-5 energy-threshold decision (S24). */
+export function energyThresholdEditsIsWellFormed(value: unknown): boolean {
+  if (value === null) return true;
+  if (!isRecord(value) || !hasOnlyKeys(value, ['schema', 'basis', 'ranges']) || value.schema !== 1
+    || !validRnaBasis(value.basis) || !Array.isArray(value.ranges)) return false;
+
+  const rangeIds: string[] = [];
+  for (const entry of value.ranges) {
+    if (!isRecord(entry) || !hasOnlyKeys(entry, ['row', 'values'])
+      || !isRangeAddress(entry.row) || !isRecord(entry.values)) return false;
+    const row = entry.row;
+    rangeIds.push(`${row.chain}\u0000${row.start}\u0000${row.end}`);
+    for (const [fragment, threshold] of Object.entries(entry.values)) {
+      if (!validFragmentKey(fragment)) return false;
+      if (threshold === null) continue;
+      if (typeof threshold !== 'string' || !/^[+-]?(?:0|[1-9]\d*)(?:\.\d{1,2})?$/.test(threshold)
+        || !Number.isFinite(Number(threshold))) return false;
+    }
+  }
+  return isUnique(rangeIds);
+}
+
 /** Strict read validator for the edit markers consumed by the stage graph. */
 export function markerIsWellFormed(kind: MarkerKind, value: unknown): boolean {
   if (kind !== 'best_fit_clip' && value === null) return true;
