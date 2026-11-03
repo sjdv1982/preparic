@@ -448,7 +448,8 @@ export class MolViewer {
         await this.deleteStateRefs([data]);
         return null;
       }
-      const cif = data.obj?.data;
+      if (!data?.obj) throw new Error('The PDB entry could not be downloaded. Check the four-character PDB code.');
+      const cif = data.obj.data;
       if (typeof cif !== 'string') throw new Error('The PDB entry did not return a text CIF file.');
       // Keep the last visible structure in place while the network request is
       // pending. Recheck the shared target before replacing it with this CIF.
