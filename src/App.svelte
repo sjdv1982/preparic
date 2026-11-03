@@ -114,6 +114,7 @@
   let viewerError = $state('');
   let preparedViewerKey = '';
   let preparedViewerActive = false;
+  let preparedViewerReady = $state(false);
 
   function handleViewerReady(created: MolViewer) {
     viewer = created;
@@ -497,6 +498,7 @@
       const share = seamlessState.rangePdbsAa as any;
       if (seamlessState.computedFreshness.range_pdbs_aa !== true || !share
         || share.schema !== 1 || !Array.isArray(share.pdbs)) {
+        preparedViewerReady = false;
         if (preparedViewerKey !== 'pending') {
           preparedViewerKey = 'pending';
           void viewer.clearPreparedPdbs();
@@ -529,9 +531,14 @@
       ]);
       if (loadKey === preparedViewerKey) return;
       preparedViewerKey = loadKey;
+      preparedViewerReady = false;
       viewer.setGranularity('residue');
       const isCurrentTarget = () => seamlessState.ready && appState.stage >= 4 && preparedViewerKey === loadKey;
-      void viewer.showPreparedPdbs(share.pdbs, overlays, isCurrentTarget).catch(error => {
+      void viewer.showPreparedPdbs(share.pdbs, overlays, isCurrentTarget).then(() => {
+        if (isCurrentTarget()) preparedViewerReady = true;
+      }).catch(error => {
+        if (preparedViewerKey !== loadKey) return;
+        preparedViewerReady = false;
         viewerError = error instanceof Error ? error.message : String(error);
       });
       return;
@@ -539,6 +546,7 @@
     if (preparedViewerActive) {
       preparedViewerActive = false;
       preparedViewerKey = '';
+      preparedViewerReady = false;
       void viewer.restoreLastVisibleView().then(() => {
         if (appState.stage === 3 && seamlessState.computedFreshness.stackings) {
           const selectedStackings = resolveSelectedStackings(
@@ -713,7 +721,7 @@
         <div class="viewer-corner-label"><span>{appState.stage >= 4 ? 'PREPARED PDBs' : 'RCSB PDB'}</span><span class="corner-separator">/</span><span>Mol*</span></div>
       </div>
       <div class="viewer-footer">
-        <div class="viewer-footer-left"><span class="footer-live-dot"></span>{appState.structureReady ? `Ready${appState.pdbId ? ` · ${appState.pdbId}` : ''}` : 'Awaiting structure'}</div>
+        <div class="viewer-footer-left"><span class="footer-live-dot"></span>{(appState.stage >= 4 ? preparedViewerReady : appState.structureReady) ? `Ready${appState.pdbId ? ` · ${appState.pdbId}` : ''}` : 'Awaiting structure'}</div>
         <div class="axis-indicator"><span class="axis-y">Y</span><span class="axis-x">X</span><span class="axis-z">Z</span><i></i></div>
         <div class="viewer-footer-right">Molecular graphics <span>•</span> Phase 1</div>
       </div>
