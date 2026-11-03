@@ -3,6 +3,7 @@
   import { appState } from '../lib/state.svelte';
   import {
     copyComputedThresholds,
+    canContinueStage4,
     selectedCandidateFragments,
     thresholdsCompleteForClip,
     validateThresholdEdits,
@@ -12,7 +13,9 @@
     type ThresholdMarker,
   } from '../lib/stage4';
 
-  let { onBack }: { onBack: () => Promise<boolean> } = $props();
+  let { onBack, onContinue, embedded = false }: {
+    onBack: () => Promise<boolean>; onContinue: () => Promise<boolean>; embedded?: boolean;
+  } = $props();
   let edits = $state<ThresholdMarker | null>(null);
   let message = $state('');
   let clip1Draft = $state('0');
@@ -44,6 +47,7 @@
   let stackingRows = $derived(seamlessState.computed.stackings);
   let candidatesFresh = $derived(seamlessState.computedFreshness.stackings === true
     && seamlessState.computedFreshness.fragments === true);
+  let energeticsFresh = $derived(seamlessState.computedFreshness.energetics === true);
   let selectedKeys = $derived.by(() => {
     const marker = seamlessState.projectSnapshot.stacking_selection;
     if (!record(marker) || !record(marker.selected)) return [] as string[];
@@ -54,6 +58,18 @@
   let validatorFailed = $derived(seamlessState.stateGraphErrors.some(issue => issue.name === 'validate_threshold_edits' && issue.state === 'failed'));
   let fragmentCount = $derived(inventory?.fragments?.length ?? 0);
   let complete = $derived(!!edits && thresholdsCompleteForClip(edits, fragmentCount, clip));
+  let canContinue = $derived(canContinueStage4({
+    edits,
+    fragmentCount,
+    clip,
+    selectedCandidates: candidates,
+    energeticsFresh,
+    thresholdValidatorFailed: validatorFailed,
+  }) && !!inventory && validateThresholdEdits(edits, inventory)
+    && seamlessState.ready && seamlessState.status === 'live' && seamlessState.projectStage === 4
+    && seamlessState.computedFreshness.fragments === true && seamlessState.computedFreshness.stackings === true
+    && !seamlessState.pendingInputs.includes('threshold_edits')
+    && !seamlessState.pendingInputs.includes('best_fit_clip'));
   let diffCount = $derived.by(() => {
     if (!edits || !computedFresh || !computedThresholds) return 0;
     let count = 0;
@@ -166,15 +182,25 @@
     if (!await onBack()) message = 'The threshold table could not be deactivated before leaving stage 4.';
   }
 
+  async function continueToEnergetics(): Promise<void> {
+    message = '';
+    if (!await onContinue()) message = 'The shared project could not enter stage 5. Wait for fresh best-fit and range results, then try again.';
+  }
+
   function isWarning(value: string | null): boolean {
     return value !== null && Number(value) > 10;
   }
 </script>
 
-<section class="stage-content stage-four-content">
-  <div class="eyebrow">Stage 04 <span>Best fits</span></div>
-  <h1>Set fit thresholds</h1>
-  <p class="stage-description">Review each dinucleotide's best fit and set the RMSD limits used for the kept fragments.</p>
+<section class="stage-content stage-four-content" class:stage4-embedded={embedded}>
+  {#if embedded}
+    <h2 class="stage4-embedded-title">Fit RMSD thresholds</h2>
+    <p class="stage-description">Edit the RMSD limits used for the kept fragments.</p>
+  {:else}
+    <div class="eyebrow">Stage 04 <span>Best fits</span></div>
+    <h1>Set fit thresholds</h1>
+    <p class="stage-description">Review each dinucleotide's best fit and set the RMSD limits used for the kept fragments.</p>
+  {/if}
 
   {#if seamlessState.stateGraphErrors.length}
     {#each seamlessState.stateGraphErrors as issue (`${issue.name}:${issue.state}`)}
@@ -190,11 +216,11 @@
     <p class="stage4-error" role="alert">The threshold decision is unavailable. Return to stackings and continue again.</p>
   {:else}
     <div class="stage4-toolbar">
-      <div class="stage4-clip-controls">
+      {#if !embedded}<div class="stage4-clip-controls">
         <label>Clip 5′ <input aria-label="Clip fragments from 5 prime end" inputmode="numeric" value={clip1Draft} onchange={event => clip1Draft = event.currentTarget.value} disabled={seamlessState.pendingInputs.includes('best_fit_clip')} /></label>
         <label>Clip 3′ <input aria-label="Clip fragments from 3 prime end" inputmode="numeric" value={clip2Draft} onchange={event => clip2Draft = event.currentTarget.value} disabled={seamlessState.pendingInputs.includes('best_fit_clip')} /></label>
         <button class="button button-secondary" onclick={saveClip} disabled={seamlessState.pendingInputs.includes('best_fit_clip')}>Apply clip</button>
-      </div>
+      </div>{/if}
       <div class="stage4-copy-controls">
         <span>{computedFresh ? `${diffCount} cells differ from computed` : 'Computed thresholds pending'}</span>
         <button class="button button-secondary" disabled={!computedFresh} onclick={copyAll}>Copy computed values</button>
@@ -253,7 +279,11 @@
     <p class="stage4-gate" aria-live="polite">{complete ? 'Kept fragment thresholds are complete.' : 'Fill every threshold for kept fragments and pairs before continuing.'}</p>
   {/if}
 
-  <div class="stage-footer stage-footer-split">
+  {#if !embedded}<div class="stage-footer stage-footer-split">
     <button class="button button-secondary" onclick={leaveStage}><span aria-hidden="true">←</span> Back to stackings</button>
-  </div>
+    <button class="button button-primary" onclick={continueToEnergetics}
+      disabled={!canContinue}>
+      Continue to energetics <span aria-hidden="true">→</span>
+    </button>
+  </div>{/if}
 </section>

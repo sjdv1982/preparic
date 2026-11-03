@@ -7,10 +7,12 @@ prompt; call ``close_context()`` when you are done.
 import atexit
 import copy
 import json
+import math
 import os
 import re
 import signal
 import sys
+import threading
 from pathlib import Path
 
 import seamless
@@ -22,6 +24,8 @@ from alaric_dir import resolve_alaric_dir
 from alaric_runtime import (
     best_fit_factory,
     best_fit_tables_transformer,
+    energy_threshold_module_code,
+    energetics_range_transformer,
     fragment_library_identities,
     refe_fragments_transformer,
     threshold_module_code,
@@ -49,6 +53,8 @@ CLIPPED_FRAGMENTS_PATH = MOUNT_DIRECTORY / "clipped-fragments"
 
 LOCAL_WORKER_COUNT = 8
 _LOCAL_EXECUTION_CONFIGURED = False
+_STAGE5_RANGE_SYNC_STOP: threading.Event | None = None
+_STAGE5_RANGE_SYNC_THREAD: threading.Thread | None = None
 
 _RANGE_KEYS = {"chain", "start", "end"}
 _MARKER_KEYS = {
@@ -150,7 +156,7 @@ def _valid_decision(name: str, value: object) -> bool:
             or not _unique(value["rows"]):
             return False
         if type(value["ranges"]) is not list or not all(isinstance(key, str) and re.fullmatch(r"range-[1-9][0-9]*", key) for key in value["ranges"]) \
-            or not _unique(value["ranges"]) or type(value["grid"]) is not list:
+            or type(value["grid"]) is not list:
             return False
         return all(type(row) is list and len(row) == len(value["ranges"]) and all(type(cell) is bool for cell in row) for row in value["grid"])
     if name == "gaussian_classes":
@@ -179,9 +185,16 @@ def _valid_decision(name: str, value: object) -> bool:
             for fragment, threshold in entry["values"].items():
                 if re.fullmatch(r"frag-[1-9][0-9]*-[ACGU]{2}", fragment) is None:
                     return False
-                if threshold is not None and (not isinstance(threshold, str)
-                    or re.fullmatch(r"-?(?:0|[1-9][0-9]*)\.[0-9]{2}", threshold) is None):
-                    return False
+                if threshold is not None:
+                    if not isinstance(threshold, str) or re.fullmatch(
+                        r"[+-]?(?:0|[1-9][0-9]*)(?:\.[0-9]{1,2})?", threshold
+                    ) is None:
+                        return False
+                    try:
+                        if not math.isfinite(float(threshold)):
+                            return False
+                    except ValueError:
+                        return False
         return _unique(rows)
     return False
 
@@ -526,6 +539,89 @@ def _stage4_clip_fragments(
     )
 
 
+def _stage5_energetics_ligands(refe_fragments: dict, best_fit: dict, fragments: dict) -> dict:
+    import preparic_stage5
+    return preparic_stage5.energetics_ligands(refe_fragments, best_fit, fragments)
+
+
+def _stage5_merge_energetics(
+    range_results: dict, range_specs: dict, best_fits: dict, fragments: dict,
+) -> dict:
+    import preparic_stage5
+    decoded = {}
+    for name, payload in range_results.items():
+        if not isinstance(name, str) or not name.endswith(".json") or not isinstance(payload, bytes):
+            continue
+        try:
+            decoded[name[:-5]] = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Energetics result {name} is not valid UTF-8 JSON: {exc}") from exc
+    return preparic_stage5.merge_energetics(decoded, range_specs, best_fits, fragments)
+
+
+def _reconcile_stage5_range_scorers(context: Context, alaric_dir: Path, stop: threading.Event) -> None:
+    """Keep one T13 graph node and one result path for each current S5 row."""
+    installed: dict[int, str] = {}
+    while not stop.wait(0.25):
+        try:
+            specs = context.range_specs.value
+        except Exception:
+            continue
+        rows = specs.get("rows") if type(specs) is dict and specs.get("schema") == 1 else None
+        wanted = set(range(2, len(rows) + 1)) if isinstance(rows, list) and len(rows) >= 2 else set()
+
+        for index in sorted(wanted - installed.keys()):
+            name = f"energetics_range_{index}"
+            try:
+                setattr(context, name, energetics_range_transformer(alaric_dir))
+                scorer = getattr(context, name)
+                scorer.pins.ligands = context.energetics_ligands.result
+                scorer.pins.receptor = context.protein_pdbs[f"range-{index}-aa.pdb"]
+                scorer.celltypes.ligands = "folder"
+                scorer.celltypes.receptor = "bytes"
+                scorer.celltypes.result = "folder"
+                context.energetics_range_results[f"range-{index}.json"] = scorer.result["energetics.json"]
+                installed[index] = name
+            except Exception:
+                # Keep the desired index uninstalled so a transient Context
+                # ingress failure is retried on the next reconciliation pass.
+                continue
+
+        for index in sorted(installed.keys() - wanted):
+            name = installed[index]
+            try:
+                del context.energetics_range_results[f"range-{index}.json"]
+                delattr(context, name)
+                del installed[index]
+            except Exception:
+                continue
+
+
+def _stage5_energy_thresholds(energetics: dict, best_fits: dict) -> dict:
+    import energy_threshold
+    import preparic_stage5
+    return preparic_stage5.energy_thresholds(energetics, best_fits, energy_threshold)
+
+
+def _stage5_validate_energy_threshold_edits(edits: object, fragments: object, range_specs: object) -> None:
+    import preparic_stage5
+    return preparic_stage5.validate_energy_threshold_edits(edits, fragments, range_specs)
+
+
+def _stage5_interaction_handoff(
+    matrix: object,
+    fragments: object,
+    selection: object,
+    stackings: object,
+    clip: object,
+    range_specs: object,
+) -> dict:
+    import preparic_stage5
+    return preparic_stage5.interaction_handoff(
+        matrix, fragments, selection, stackings, clip, range_specs
+    )
+
+
 def _add_stacking_pipeline(
     context: Context, ring_references: dict[str, Cell], mount_directory: Path | None = None
 ) -> None:
@@ -805,6 +901,77 @@ def build_context() -> Context:
         context.clipped_fragments = context.clip_fragments.result
         context.clipped_fragments.mount(CLIPPED_FRAGMENTS_PATH, mode="w")
 
+        # W4/W5 energetics and interaction hand-off. T12 deliberately reads
+        # the full T6/T5 folders and has no clip input, so clip edits do not
+        # redo fitting or ligand preparation. The live S5-row reconciler adds
+        # one receptor-pinned T13 scorer per protein range; T14 restores order.
+        stage5_module = {
+            "type": "interpreted",
+            "language": "python",
+            "code": (PROJECT_ROOT / "stage5.py").read_text(encoding="utf-8"),
+        }
+        context.energetics_ligands = _stage5_energetics_ligands
+        context.energetics_ligands.modules.preparic_stage5 = stage5_module
+        context.energetics_ligands.pins.refe_fragments = context.refe_fragments.result
+        context.energetics_ligands.pins.best_fit = context.best_fit.result
+        context.energetics_ligands.pins.fragments = context.fragments
+        context.energetics_ligands.celltypes.refe_fragments = "folder"
+        context.energetics_ligands.celltypes.best_fit = "folder"
+        context.energetics_ligands.celltypes.fragments = "plain"
+        context.energetics_ligands.celltypes.result = "folder"
+
+        # T13 scorers are installed and removed by the S5-row reconciler below.
+        # Each node is pinned to one receptor file, so a range edit invalidates
+        # only that node while a ligand-folder change invalidates every scorer.
+        context.energetics_range_results = Cell(celltype="folder")
+        context.merge_energetics = _stage5_merge_energetics
+        context.merge_energetics.modules.preparic_stage5 = stage5_module
+        context.merge_energetics.pins.range_results = context.energetics_range_results
+        context.merge_energetics.pins.range_specs = context.range_specs
+        context.merge_energetics.pins.best_fits = context.best_fits
+        context.merge_energetics.pins.fragments = context.fragments
+        context.merge_energetics.celltypes.range_results = "folder"
+        context.merge_energetics.celltypes.range_specs = "plain"
+        context.merge_energetics.celltypes.best_fits = "plain"
+        context.merge_energetics.celltypes.fragments = "plain"
+        context.merge_energetics.celltypes.result = "plain"
+        context.energetics = context.merge_energetics.result
+
+        energy_threshold_code, threshold_rounding_code = energy_threshold_module_code(alaric_dir)
+        context.energy_thresholds_transformer = _stage5_energy_thresholds
+        context.energy_thresholds_transformer.modules.preparic_stage5 = stage5_module
+        context.energy_thresholds_transformer.modules.energy_threshold = energy_threshold_code
+        context.energy_thresholds_transformer.modules.threshold_rounding = threshold_rounding_code
+        context.energy_thresholds_transformer.pins.energetics = context.energetics
+        context.energy_thresholds_transformer.pins.best_fits = context.best_fits
+        context.energy_thresholds_transformer.celltypes.energetics = "plain"
+        context.energy_thresholds_transformer.celltypes.best_fits = "plain"
+        context.energy_thresholds_transformer.celltypes.result = "plain"
+        context.energy_thresholds = context.energy_thresholds_transformer.result
+
+        context.validate_energy_threshold_edits = _stage5_validate_energy_threshold_edits
+        context.validate_energy_threshold_edits.modules.preparic_stage5 = stage5_module
+        context.validate_energy_threshold_edits.pins.edits = context.energy_threshold_edits
+        context.validate_energy_threshold_edits.pins.fragments = context.fragments
+        context.validate_energy_threshold_edits.pins.range_specs = context.range_specs
+        context.validate_energy_threshold_edits.celltypes.edits = "plain"
+        context.validate_energy_threshold_edits.celltypes.fragments = "plain"
+        context.validate_energy_threshold_edits.celltypes.range_specs = "plain"
+        context.validate_energy_threshold_edits.celltypes.result = "plain"
+
+        context.interaction_handoff = _stage5_interaction_handoff
+        context.interaction_handoff.modules.preparic_stage5 = stage5_module
+        context.interaction_handoff.pins.matrix = context.interaction_matrix
+        context.interaction_handoff.pins.fragments = context.fragments
+        context.interaction_handoff.pins.selection = context.stacking_selection
+        context.interaction_handoff.pins.stackings = context.stackings
+        context.interaction_handoff.pins.clip = context.best_fit_clip
+        context.interaction_handoff.pins.range_specs = context.range_specs
+        for pin in ("matrix", "fragments", "selection", "stackings", "clip", "range_specs"):
+            context.interaction_handoff.celltypes[pin] = "plain"
+        context.interaction_handoff.celltypes.result = "plain"
+        context.interactions = context.interaction_handoff.result
+
         context.pdbcode.share(readonly=False)
         context.biounit.share(readonly=False)
         context.cif.share(path="cif.cif", readonly=False)
@@ -822,8 +989,22 @@ def build_context() -> Context:
         context.interaction_matrix.share(readonly=False)
         context.gaussian_classes.share(readonly=False)
         context.energy_threshold_edits.share(readonly=False)
+        context.energetics.share(path="energetics.json")
+        context.energy_thresholds.share(path="computed-energy-thresholds.json")
+        context.interactions.share(path="interactions.json")
         context.structure_id_result.share(path="structure_id")
         context.mounts.sync(timeout=60)
+        global _STAGE5_RANGE_SYNC_STOP, _STAGE5_RANGE_SYNC_THREAD
+        if _STAGE5_RANGE_SYNC_STOP is not None:
+            _STAGE5_RANGE_SYNC_STOP.set()
+        _STAGE5_RANGE_SYNC_STOP = threading.Event()
+        _STAGE5_RANGE_SYNC_THREAD = threading.Thread(
+            target=_reconcile_stage5_range_scorers,
+            args=(context, alaric_dir, _STAGE5_RANGE_SYNC_STOP),
+            name="Preparic-stage5-range-reconciler",
+            daemon=True,
+        )
+        _STAGE5_RANGE_SYNC_THREAD.start()
         ctx = context
         return context
     except BaseException:
@@ -836,7 +1017,13 @@ def build_context() -> Context:
 
 def close_context() -> None:
     """Close the module-level context and its share server."""
-    global ctx
+    global ctx, _STAGE5_RANGE_SYNC_STOP, _STAGE5_RANGE_SYNC_THREAD
+    if _STAGE5_RANGE_SYNC_STOP is not None:
+        _STAGE5_RANGE_SYNC_STOP.set()
+    if _STAGE5_RANGE_SYNC_THREAD is not None and _STAGE5_RANGE_SYNC_THREAD is not threading.current_thread():
+        _STAGE5_RANGE_SYNC_THREAD.join(timeout=2)
+    _STAGE5_RANGE_SYNC_STOP = None
+    _STAGE5_RANGE_SYNC_THREAD = None
     if ctx is not None:
         ctx.close()
         ctx = None

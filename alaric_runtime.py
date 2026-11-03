@@ -52,8 +52,8 @@ def pinned_cli_transformer(
     """Build a CLI transformer with flat checksum pins and a declared layout.
 
     The DEPS entries are pinned by content, then reconstructed under the
-    relative `util/`, `alaric/`, and `fraglib/` layout expected by Alaric's
-    command-line tools. Runtime project data remains on unbound pins.
+    relative `util/`, `alaric/`, `fraglib/`, and `attract-jax/` layout expected
+    by Alaric's command-line tools. Runtime project data remains on unbound pins.
     """
     from seamless import Checksum
     from seamless_transformer import Transformer
@@ -66,8 +66,9 @@ def pinned_cli_transformer(
     if not entries or any(not line or line != line.strip() or line.startswith("#") for line in entries):
         raise ValueError(f"{deps_filename} must contain one relative dependency per line.")
 
-    declared = [deps_path]
-    declared.extend((util_dir / entry).resolve() for entry in entries)
+    # The manifest is source-side factory input only. Stage the eight named
+    # files themselves so a worker never needs an unstaged .DEPS.txt file.
+    declared = [(util_dir / entry).resolve() for entry in entries]
     destinations = {}
     sources = {}
     for path in declared:
@@ -75,7 +76,7 @@ def pinned_cli_transformer(
             relative = path.relative_to(root)
         except ValueError as exc:
             raise ValueError(f"Dependency {path} is outside Alaric's repository root.") from exc
-        if relative.parts[0] not in {"util", "alaric", "fraglib"}:
+        if relative.parts[0] not in {"util", "alaric", "fraglib", "attract-jax"}:
             raise ValueError(f"Unexpected Alaric dependency location {relative}.")
         if relative.parts[0] == "fraglib" and len(relative.parts) > 1:
             destination = Path(*relative.parts)
@@ -162,6 +163,38 @@ python -B util/refe-best-fit-tables.py best_fit/best-fits.tsv rna.pdb \
         },
         meta_file=fraglib_config,
     )
+
+
+def energetics_range_transformer(alaric_dir: str | Path):
+    """Build one independent T13 scorer for a single protein range."""
+    command = """mkdir -p RESULT
+cp -a ligands work/ligands
+cp receptor work/receptor-aa.pdb
+cd work
+python -B util/energetics_seamless_support.py score ligands receptor-aa.pdb
+cp energies.json ../RESULT/energetics.json
+"""
+    return pinned_cli_transformer(
+        alaric_dir,
+        "energetics_seamless_support.py.DEPS.txt",
+        command,
+        {"ligands": "folder", "receptor": "bytes"},
+        conda_environment="alaric",
+    )
+
+
+def energy_threshold_module_code(alaric_dir: str | Path) -> tuple[dict, dict]:
+    """Return Alaric's stdlib rounding module and its decimal helper."""
+    root = resolve_alaric_repo_root(alaric_dir)
+    return {
+        "type": "interpreted",
+        "language": "python",
+        "code": (root / "alaric" / "energy_threshold.py").read_text(encoding="utf-8"),
+    }, {
+        "type": "interpreted",
+        "language": "python",
+        "code": (root / "alaric" / "threshold_rounding.py").read_text(encoding="utf-8"),
+    }
 
 
 def threshold_module_code(alaric_dir: str | Path) -> tuple[dict, dict]:

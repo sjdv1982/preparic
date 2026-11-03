@@ -3,13 +3,16 @@
   import Stage2Ranges from './components/Stage2Ranges.svelte';
   import Stage3Stackings from './components/Stage3Stackings.svelte';
   import Stage4BestFits from './components/Stage4BestFits.svelte';
+  import Stage5Energetics from './components/Stage5Energetics.svelte';
   import Viewer from './components/Viewer.svelte';
   import { clearStructureDependentState, enterStage2, enterStage3, appState, invalidateStackingState, returnToStage1, returnToStage2 } from './lib/state.svelte';
-  import { cancelSharedCifWrite, deactivateProjectDecisionAndWait, prepareProjectTransition, seamlessState, setProjectDecisionAwaited, setSharedBiounitIndex, setSharedCif, setSharedPdbCode, setSharedRangeRows, setSharedStackingSelectionAndWait, waitForShareWrite } from './lib/seamless.svelte';
+  import { cancelSharedCifWrite, deactivateProjectDecisionAndWait, prepareProjectTransition, seamlessState, setEnergyThresholdEditsAwaited, setProjectDecisionAwaited, setSharedBiounitIndex, setSharedCif, setSharedPdbCode, setSharedRangeRows, setSharedStackingSelectionAndWait, waitForShareWrite } from './lib/seamless.svelte';
   import { findChain } from './lib/chains';
   import { cloneRangeRows, updateRow, validateRows } from './lib/ranges';
   import { mergeStackings, observeStage2RangeRows, resolveSelectedStackings } from './lib/stackings';
-  import { canEnterStage4, clipForSelectedAnchors, makeThresholdSkeleton, selectedCandidateFragments, validateThresholdEdits } from './lib/stage4';
+  import { canContinueStage4, canEnterStage4, clipForSelectedAnchors, makeThresholdSkeleton, selectedCandidateFragments, validateThresholdEdits } from './lib/stage4';
+  import { adaptInteractionMatrix, candidateAnchors, makeInteractionMatrix, recomputeInteractionMatrix, reconcileEnergyThresholdEdits, stage5CanAdvance, stage5Rows, type Stage5S14 } from './lib/stage5';
+  import { markerIsWellFormed } from './lib/project-state';
   import type { ChainKey, PickInfo, RangeRow, RangeSpec } from './lib/types';
   import type { MolViewer } from './lib/molstar/viewer';
 
@@ -363,6 +366,122 @@
     seamlessState.stackingSelectionError = '';
   }
 
+  async function continueToStage5(): Promise<boolean> {
+    const snapshot = seamlessState.projectSnapshot;
+    const inventory = seamlessState.computed.fragments;
+    const clip = snapshot.best_fit_clip;
+    const selection = snapshot.stacking_selection;
+    const stackings = seamlessState.computed.stackings;
+    const rangeMarker = snapshot.ranges;
+    const rangeRows = rangeMarker && typeof rangeMarker === 'object' && 'rows' in rangeMarker
+      && Array.isArray(rangeMarker.rows) ? rangeMarker.rows : null;
+    const edits = snapshot.threshold_edits;
+    const fragmentCount = inventory && typeof inventory === 'object' && 'fragments' in inventory
+      && Array.isArray(inventory.fragments) ? inventory.fragments.length : 0;
+    const selectedKeys = selection && typeof selection === 'object' && 'selected' in selection
+      && selection.selected && typeof selection.selected === 'object'
+      ? Object.keys(selection.selected as Record<string, boolean>)
+        .filter(key => (selection.selected as Record<string, boolean>)[key] === true) : [];
+    const selectedCandidates = selectedCandidateFragments(inventory, selectedKeys, stackings);
+    const thresholdValidatorFailed = seamlessState.stateGraphErrors.some(issue =>
+      issue.name === 'validate_threshold_edits' && issue.state === 'failed');
+    if (!seamlessState.ready || seamlessState.status !== 'live' || seamlessState.projectStage !== 4
+      || seamlessState.pendingInputs.includes('threshold_edits') || seamlessState.pendingInputs.includes('best_fit_clip')
+      || seamlessState.computedFreshness.fragments !== true || seamlessState.computedFreshness.energetics !== true
+      || !rangeRows || !inventory || !selection || !clip || !validateThresholdEdits(edits, inventory)
+      || thresholdValidatorFailed) return false;
+    const currentEcho = (inventory as any).echo;
+    const clipBasis = (clip as any).basis;
+    if (!currentEcho || !clipBasis || clipBasis.pdbcode !== currentEcho.pdbcode
+      || !clipBasis.rna || !currentEcho.rna || clipBasis.rna.chain !== currentEcho.rna.chain
+      || clipBasis.rna.start !== currentEcho.rna.start || clipBasis.rna.end !== currentEcho.rna.end) return false;
+    if (!canContinueStage4({
+      edits,
+      fragmentCount,
+      clip,
+      selectedCandidates,
+      energeticsFresh: seamlessState.computedFreshness.energetics === true,
+      thresholdValidatorFailed,
+    })) return false;
+    const matrixSkeleton = makeInteractionMatrix(inventory, clip, rangeRows, selection, stackings);
+    const anchors = matrixSkeleton ? candidateAnchors(inventory, selection, stackings, matrixSkeleton.rows) : null;
+    if (!matrixSkeleton || !anchors) return false;
+
+    const reconciled = reconcileEnergyThresholdEdits(
+      seamlessState.energyThresholdEdits,
+      inventory,
+      rangeRows,
+    );
+    if (!reconciled) return false;
+    if (JSON.stringify(seamlessState.energyThresholdEdits) !== JSON.stringify(reconciled)
+      && !await setEnergyThresholdEditsAwaited(reconciled)) return false;
+
+    if (!await prepareProjectTransition(5)) return false;
+    const existing = snapshot.interaction_matrix;
+    let nextMatrix: Stage5S14 | null = null;
+    if (markerIsWellFormed('interaction_matrix', existing)
+      && existing && typeof existing === 'object' && 'basis' in existing && 'ranges' in existing
+      && 'rows' in existing && 'grid' in existing
+      && JSON.stringify(existing.basis) === JSON.stringify(matrixSkeleton.basis)
+      && JSON.stringify(existing.ranges) === JSON.stringify(matrixSkeleton.ranges)) {
+      nextMatrix = adaptInteractionMatrix(existing, matrixSkeleton.rows, anchors, seamlessState.computed.energetics);
+    }
+    if (!nextMatrix) {
+      nextMatrix = recomputeInteractionMatrix(matrixSkeleton, anchors, seamlessState.computed.energetics);
+    }
+    // A lock-row scoring error is a stage-5 matrix diagnostic, not a veto on
+    // entering stage 5. The user must be able to see the affected anchor and
+    // return to stage 3 to deselect it.
+    if (!nextMatrix) nextMatrix = matrixSkeleton;
+    nextMatrix = { ...nextMatrix, active: true };
+    return await setProjectDecisionAwaited('interaction_matrix', nextMatrix);
+  }
+
+  async function backToStage4(): Promise<boolean> {
+    return await deactivateProjectDecisionAndWait('interaction_matrix');
+  }
+
+  async function continueToStage6(): Promise<boolean> {
+    const snapshot = seamlessState.projectSnapshot;
+    const inventory = seamlessState.computed.fragments;
+    const rangeMarker = snapshot.ranges;
+    const rangeRows = rangeMarker && typeof rangeMarker === 'object' && 'rows' in rangeMarker
+      && Array.isArray(rangeMarker.rows) ? rangeMarker.rows : null;
+    const rows = stage5Rows(inventory, snapshot.best_fit_clip);
+    const anchors = rows ? candidateAnchors(
+      inventory, snapshot.stacking_selection, seamlessState.computed.stackings, rows,
+    ) : null;
+    const classes = snapshot.gaussian_classes;
+    const selected = snapshot.stacking_selection && typeof snapshot.stacking_selection === 'object'
+      && 'selected' in snapshot.stacking_selection && snapshot.stacking_selection.selected
+      && typeof snapshot.stacking_selection.selected === 'object'
+      ? Object.keys(snapshot.stacking_selection.selected as Record<string, boolean>)
+        .filter(key => (snapshot.stacking_selection as any).selected[key] === true).sort() : [];
+    const classRowsMatch = markerIsWellFormed('gaussian_classes', classes)
+      && classes && typeof classes === 'object' && 'basis' in classes
+      && JSON.stringify([...(classes.basis as string[])].sort()) === JSON.stringify(selected);
+    const validatorFailed = seamlessState.stateGraphErrors.some(issue =>
+      issue.name === 'validate_energy_threshold_edits' && issue.state === 'failed');
+    const gate = stage5CanAdvance(snapshot, {
+      ready: seamlessState.ready && seamlessState.status === 'live',
+      stage: seamlessState.projectStage,
+      energeticsFresh: seamlessState.computedFreshness.energetics === true,
+      bestFitsFresh: seamlessState.computedFreshness.best_fits === true,
+      geometryFresh: seamlessState.computedFreshness.bestfit_stackings === true,
+      gaussianFresh: seamlessState.computedFreshness.gaussian_scores === true,
+      gaussianClassesValid: !!classRowsMatch,
+      validatorFailed,
+      fragments: inventory,
+      rangeRows,
+      stackings: seamlessState.computed.stackings,
+      anchors: anchors ?? undefined,
+      energetics: seamlessState.computed.energetics,
+      energyEdits: seamlessState.energyThresholdEdits,
+    });
+    if (!gate.allowed || !classRowsMatch || !classes || typeof classes !== 'object') return false;
+    return await setProjectDecisionAwaited('gaussian_classes', { ...classes, active: true });
+  }
+
   $effect(() => {
     if (!viewer) return;
     if (appState.stage >= 4 && !seamlessState.ready) {
@@ -553,7 +672,9 @@
       {:else if appState.stage === 3}
         <Stage3Stackings onBack={backToRanges} onContinue={continueToStage4} />
       {:else if appState.stage === 4}
-        <Stage4BestFits onBack={backToStackings} />
+        <Stage4BestFits onBack={backToStackings} onContinue={continueToStage5} />
+      {:else if appState.stage === 5}
+        <Stage5Energetics onBack={backToStage4} onContinue={continueToStage6} />
       {:else}
         <section class="stage-content" aria-live="polite">
           <div class="eyebrow">Stage {appState.stage}</div>

@@ -193,7 +193,7 @@ describe('W3 forward gates use current data without waiting for the fit', () => 
     expect(canEnterStage4({ ...enter, selection: { ...selection, selected: { ...selection.selected, orphan: true } } })).toBe(false);
   });
 
-  it('allows typed thresholds without computed Copy source, while enforcing T10/clip/energetics', () => {
+  it('test_continue_4_to_5_accepts_complete_typed_thresholds_while_copy_source_stale', () => {
     const args = { edits: filled(), fragmentCount: 3, clip, selectedCandidates: [2], energeticsFresh: true, thresholdValidatorFailed: false };
     expect(canContinueStage4(args)).toBe(true);
     expect(canContinueStage4({ ...args, energeticsFresh: false })).toBe(false);

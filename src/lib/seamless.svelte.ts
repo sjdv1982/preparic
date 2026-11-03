@@ -1099,11 +1099,18 @@ function attachShare(key: ShareKey, keys: string[]): void {
       break;
     case 'energy_threshold_edits':
       install(value => {
+        if (observePendingWrite('energy_threshold_edits', value, cell.marker, applyingAuthoritativeRead)) {
+          if (applyingAuthoritativeRead) { received.add('energy_threshold_edits'); updateReady(); }
+          return;
+        }
         const parsed = parseEnergyThresholdEdits(value);
         const valid = parsed !== undefined && energyThresholdEditsIsWellFormed(parsed);
         seamlessState.energyThresholdEdits = valid ? parsed : null;
         received.add(key);
-        if (valid) delete seamlessState.decisionErrors.energy_threshold_edits;
+        if (valid) {
+          clearPendingInput('energy_threshold_edits');
+          delete seamlessState.decisionErrors.energy_threshold_edits;
+        }
         else seamlessState.decisionErrors.energy_threshold_edits =
           'The stored energy threshold edits are invalid; review the stage-5 decision before continuing.';
         updateReady();
@@ -1577,6 +1584,37 @@ export function setProjectDecision(key: DecisionKey, marker: unknown): boolean {
 export async function setProjectDecisionAwaited(key: DecisionKey, marker: unknown): Promise<boolean> {
   if (!setProjectDecision(key, marker)) return false;
   return waitForShareWrite(key);
+}
+
+/** Persist the editable S24 energy table and wait for its shared acknowledgement. */
+export function setEnergyThresholdEdits(marker: unknown): boolean {
+  const cell = client?.energy_threshold_edits;
+  if (!cell || cell.readonly || !energyThresholdEditsIsWellFormed(marker)
+    || !seamlessState.ready || seamlessState.status !== 'live'
+    || seamlessState.projectStage < 4) return false;
+  const serialized = JSON.stringify(marker);
+  if (!serialized) return false;
+  if (!pendingShareWrites.has('energy_threshold_edits')
+    && stableJson(canonicalShareValue('energy_threshold_edits', cell.value)) === stableJson(marker)) {
+    seamlessState.energyThresholdEdits = marker;
+    delete seamlessState.decisionErrors.energy_threshold_edits;
+    return true;
+  }
+  beginPendingShareWrite('energy_threshold_edits', serialized, marker);
+  let accepted = false;
+  try { accepted = cell.set(serialized); } catch { accepted = false; }
+  if (!accepted) {
+    resolvePendingShareWrite('energy_threshold_edits', false);
+    return false;
+  }
+  seamlessState.energyThresholdEdits = marker;
+  delete seamlessState.decisionErrors.energy_threshold_edits;
+  return true;
+}
+
+export async function setEnergyThresholdEditsAwaited(marker: unknown): Promise<boolean> {
+  if (!setEnergyThresholdEdits(marker)) return false;
+  return waitForShareWrite('energy_threshold_edits');
 }
 
 export function deactivateProjectDecision(key: DecisionKey): boolean {

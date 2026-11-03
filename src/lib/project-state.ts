@@ -39,6 +39,7 @@ const TRANSFORMER_STAGE: Record<string, ProjectStage> = {
   validate_threshold_edits: 4,
   clip_fragments: 4,
   energetics_ligands: 5,
+  energetics: 5,
   energetics_range: 5,
   merge_energetics: 5,
   interaction_handoff: 5,
@@ -69,10 +70,11 @@ const TRANSFORMER_INPUTS: Record<string, ReadonlySet<string>> = {
   parse_best_fits: new Set(['best_fit', 'range-1-aa.pdb', 'pdbcode']),
   validate_threshold_edits: new Set(['threshold_edits', 'fragments']),
   clip_fragments: new Set(['threshold_edits', 'best_fit_clip', 'parse_best_fits']),
-  energetics_ligands: new Set(['best_fit']),
-  energetics_range: new Set(['protein_pdbs', 'energetics_ligands']),
-  merge_energetics: new Set(['best_fit', 'protein_ranges']),
-  interaction_handoff: new Set(['interaction_matrix', 'stacking_selection']),
+  energetics_ligands: new Set(['refe_fragments', 'best_fit', 'fragments']),
+  energetics_range: new Set(['receptor', 'energetics_ligands']),
+  energetics: new Set(['energetics_range_results', 'best_fits', 'range_specs', 'fragments']),
+  merge_energetics: new Set(['energetics_range_results', 'best_fits', 'range_specs', 'fragments']),
+  interaction_handoff: new Set(['interaction_matrix', 'stacking_selection', 'stackings', 'best_fit_clip', 'fragments', 'energetics']),
   energy_thresholds: new Set(['energetics', 'best_fit']),
   validate_energy_threshold_edits: new Set(['energy_threshold_edits', 'fragments', 'protein_ranges']),
   detect_stacking_bestfit: new Set(['best_fits', 'protein_ranges']),
@@ -220,7 +222,7 @@ function validMatrix(value: unknown): boolean {
     || value.schema !== 1 || !validSelectionBasis(value.basis) || typeof value.active !== 'boolean'
     || !Array.isArray(value.rows) || !value.rows.every(validFragmentKey) || !isUnique(value.rows)
     || !Array.isArray(value.ranges) || !value.ranges.every(item => typeof item === 'string' && /^range-[1-9]\d*$/.test(item))
-    || !isUnique(value.ranges) || !Array.isArray(value.grid)) return false;
+    || !Array.isArray(value.grid)) return false;
   const rangeCount = value.ranges.length;
   return value.grid.every((row: unknown) => Array.isArray(row) && row.length === rangeCount
     && row.every((cell: unknown) => typeof cell === 'boolean'));
