@@ -92,7 +92,11 @@
       event.preventDefault();
       editing = null;
       void focusCell(cell);
-    } else {
+    } else if (event.key === 'Enter') {
+      handleCellKeydown(event, cell);
+    } else if (event.key === 'Tab' || event.key.startsWith('Arrow')) {
+      // Commit the current editor before the cell is unmounted by navigation.
+      commitRows();
       handleCellKeydown(event, cell);
     }
   }
