@@ -29,7 +29,14 @@
       return;
     }
     if (id === lastHandledPdbId) return;
+    const normalizedStartupPdbId = startupPdbId?.trim().toUpperCase() ?? '';
+    const isEmptyStartupUrlLoad = normalizedStartupPdbId !== ''
+      && normalizedStartupPdbId === id
+      && seamlessState.projectStage === 1
+      && !seamlessState.pdbCode
+      && !seamlessState.pdbCodePendingWrite;
     queuePdbLoad(id, 0);
+    if (isEmptyStartupUrlLoad) setSharedPdbCode(id);
   });
 
   function handleInput(event: Event) {
@@ -108,6 +115,7 @@
         shouldContinue = continueAfterLoad;
         return true;
       });
+      if (committed) appState.chains = viewer.listChains();
       if (!committed) {
         await viewer.discardStagedStructure();
         if (request === requestId) {
@@ -207,7 +215,7 @@
   <label class="field-label" for="pdb-code">PDB code</label>
   <div class="input-with-prefix">
     <span class="input-prefix" aria-hidden="true">↗</span>
-  <input id="pdb-code" class="text-input" type="text" maxlength="4" autocomplete="off" spellcheck="false" placeholder="e.g. 2JDQ" value={appState.pdbId} oninput={handleInput} disabled={!viewer || !seamlessState.ready || (!!seamlessState.pdbCode && !appState.structureReady)} />
+  <input id="pdb-code" class="text-input" type="text" maxlength="4" autocomplete="off" spellcheck="false" placeholder="e.g. 2JDQ" value={appState.pdbId} oninput={handleInput} disabled={!viewer || !seamlessState.ready || appState.loading} />
   </div>
   <div class="field-note">Four-character code from the Protein Data Bank</div>
 

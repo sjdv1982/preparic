@@ -7,6 +7,7 @@ import {
   deferredWriteIsCurrent,
   visibleTransformerErrors,
 } from '../../src/lib/project-state';
+import type { ProjectStage } from '../../src/lib/project-state';
 
 // These are schema-1 decision documents from the W0 canonical representations.
 // Result values and state-graph status deliberately do not participate in stage derivation.
@@ -186,10 +187,10 @@ describe('W1: freshness uses the actual complete input echo (OC P5; ST 6)', () =
 });
 
 describe('W1: deferred writes belong to their original stage and revision (ST 4.1)', () => {
-  const valid = { stageAtIssue: 4, currentStage: 4, live: true, revisionAtIssue: 7, currentRevision: 7 };
+  const valid = { stageAtIssue: 4 as const, currentStage: 4 as const, live: true, revisionAtIssue: 7, currentRevision: 7 };
   it('admits an unchanged connected intent', () => expect(deferredWriteIsCurrent(valid)).toBe(true));
   it.each([
-    { currentStage: 3 }, { live: false }, { currentRevision: 8 },
+    { currentStage: 3 as const }, { live: false }, { currentRevision: 8 },
   ])('drops a deferred intent after %j', patch => {
     expect(deferredWriteIsCurrent({ ...valid, ...patch })).toBe(false);
   });
@@ -198,7 +199,7 @@ describe('W1: deferred writes belong to their original stage and revision (ST 4.
 
 describe('W1: state-graph errors are scoped to their stage and pending inputs (OC P6; CB 8.4)', () => {
   const failed = (name: string) => ({ path: [name], state: 'failed', exception: `${name} failed` });
-  const visible = (stage: number, nodes: any[], pendingInputs = new Set<string>(), hasInitialStateGraph = true) =>
+  const visible = (stage: ProjectStage, nodes: any[], pendingInputs = new Set<string>(), hasInitialStateGraph = true) =>
     visibleTransformerErrors({ stage, hasInitialStateGraph, pendingInputs, nodes });
 
   it('hides every failure until the initial state graph has arrived', () => {
@@ -214,7 +215,7 @@ describe('W1: state-graph errors are scoped to their stage and pending inputs (O
     ['validate_energy_threshold_edits', 5], ['gaussian_check', 6], ['gaussian_scores', 6],
   ] as const)('shows %s beginning at stage %s and never before it', (name, startStage) => {
     expect(visible(startStage, [failed(name)]).map(error => error.name)).toContain(name);
-    if (startStage > 1) expect(visible(startStage - 1, [failed(name)])).toEqual([]);
+    if (startStage > 1) expect(visible((startStage - 1) as ProjectStage, [failed(name)])).toEqual([]);
     expect(visible(6, [failed(name)]).map(error => error.name)).toContain(name);
   });
 

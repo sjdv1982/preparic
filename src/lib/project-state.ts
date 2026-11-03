@@ -152,7 +152,8 @@ function validSelectionBasis(value: unknown): value is string[] {
 function selectedKeys(marker: unknown): string[] | null {
   if (!isRecord(marker) || !isRecord(marker.selected)) return null;
   if (!Object.values(marker.selected).every(value => typeof value === 'boolean')) return null;
-  return Object.keys(marker.selected).filter(key => marker.selected![key] === true).sort();
+  const selected = marker.selected;
+  return Object.keys(selected).filter(key => selected[key] === true).sort();
 }
 
 function selectedBasisMatches(basis: unknown, selection: unknown): boolean {
@@ -161,7 +162,7 @@ function selectedBasisMatches(basis: unknown, selection: unknown): boolean {
     && sameValue([...basis].sort(), keys);
 }
 
-function isRangeMarker(value: unknown): boolean {
+function isRangeMarker(value: unknown): value is AnyRecord & { active: boolean; rows: RangeAddress[] } {
   return isRecord(value) && hasOnlyKeys(value, ['schema', 'basis', 'active', 'rows'])
     && value.schema === 1 && validBasisProject(value.basis)
     && typeof value.active === 'boolean'
@@ -170,7 +171,7 @@ function isRangeMarker(value: unknown): boolean {
     && isUnique(value.rows.map(row => `${row.chain}\u0000${row.start}\u0000${row.end}`));
 }
 
-function isSelectionMarker(value: unknown): boolean {
+function isSelectionMarker(value: unknown): value is AnyRecord & { active: boolean } {
   return isRecord(value) && hasOnlyKeys(value, ['schema', 'basis', 'active', 'selected'])
     && value.schema === 1 && validBasisProject(value.basis)
     && typeof value.active === 'boolean'
@@ -220,7 +221,8 @@ function validMatrix(value: unknown): boolean {
     || !Array.isArray(value.rows) || !value.rows.every(validFragmentKey) || !isUnique(value.rows)
     || !Array.isArray(value.ranges) || !value.ranges.every(item => typeof item === 'string' && /^range-[1-9]\d*$/.test(item))
     || !isUnique(value.ranges) || !Array.isArray(value.grid)) return false;
-  return value.grid.every((row: unknown) => Array.isArray(row) && row.length === value.ranges.length
+  const rangeCount = value.ranges.length;
+  return value.grid.every((row: unknown) => Array.isArray(row) && row.length === rangeCount
     && row.every((cell: unknown) => typeof cell === 'boolean'));
 }
 
@@ -264,7 +266,7 @@ function matrixRowsMatchClip(matrix: AnyRecord, snapshot: ProjectSnapshot): bool
   if (!Array.isArray(matrix.rows) || !isRecord(snapshot.threshold_edits)
     || !Array.isArray(snapshot.threshold_edits.bases)
     || !markerIsWellFormed('best_fit_clip', snapshot.best_fit_clip)) return false;
-  const clip = snapshot.best_fit_clip as AnyRecord;
+  const clip = snapshot.best_fit_clip as AnyRecord & { clip1: number; clip2: number };
   const rna = currentRnaRange(snapshot);
   if (!rna || !validRnaBasis(clip.basis)
     || !sameValue(clip.basis, { pdbcode: snapshot.pdbcode, rna })) return false;
@@ -305,7 +307,7 @@ export function markerMatchesUpstream(kind: MarkerKind, value: unknown, snapshot
     return validRnaBasis(value.basis)
       && sameValue(value.basis, { pdbcode: snapshot.pdbcode, rna });
   }
-  if (!markerIsWellFormed('stacking_selection', snapshot.stacking_selection)
+  if (!isSelectionMarker(snapshot.stacking_selection)
     || snapshot.stacking_selection.active !== true) return false;
   if (kind === 'interaction_matrix') {
     return selectedBasisMatches(value.basis, snapshot.stacking_selection)
@@ -318,6 +320,7 @@ export function markerMatchesUpstream(kind: MarkerKind, value: unknown, snapshot
       && Array.isArray(value.rows)
       && sameValue(value.rows.map((row: AnyRecord) => row.key).sort(), keys);
   }
+  return false;
 }
 
 /** Highest stage supported by a well-formed, active prefix of decision markers. */

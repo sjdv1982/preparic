@@ -4,7 +4,7 @@
   import Stage3Stackings from './components/Stage3Stackings.svelte';
   import Stage4BestFits from './components/Stage4BestFits.svelte';
   import Viewer from './components/Viewer.svelte';
-  import { enterStage2, enterStage3, appState, invalidateStackingState, returnToStage1, returnToStage2 } from './lib/state.svelte';
+  import { clearStructureDependentState, enterStage2, enterStage3, appState, invalidateStackingState, returnToStage1, returnToStage2 } from './lib/state.svelte';
   import { cancelSharedCifWrite, deactivateProjectDecisionAndWait, prepareProjectTransition, seamlessState, setProjectDecisionAwaited, setSharedBiounitIndex, setSharedCif, setSharedPdbCode, setSharedRangeRows, setSharedStackingSelectionAndWait, waitForShareWrite } from './lib/seamless.svelte';
   import { findChain } from './lib/chains';
   import { cloneRangeRows, updateRow, validateRows } from './lib/ranges';
@@ -20,20 +20,26 @@
 
   let seamlessStateInitialized = false;
   let startupStageRestoreHandled = false;
+  let startupPdbApplied = false;
   let appliedRangeRevision = 0;
   let rangeObservation = { active: false, signature: null as string | null };
 
   $effect(() => {
     if (!seamlessState.ready) return;
 
+    const requestedStartupPdbId = startupPdbId?.trim().toUpperCase() ?? '';
+    if (!startupPdbApplied && seamlessState.status === 'live' && seamlessState.projectStage === 1 && !seamlessState.pdbCode
+      && !seamlessState.pdbCodePendingWrite && /^[0-9][A-Za-z0-9]{3}$/.test(requestedStartupPdbId)) {
+      startupPdbApplied = true;
+      startupPdbIdForRestore = requestedStartupPdbId;
+      appState.pdbId = requestedStartupPdbId;
+    }
+    const startupPdbAwaitingCommit = startupPdbApplied && seamlessState.projectStage === 1
+      && !seamlessState.pdbCode && appState.pdbId === startupPdbIdForRestore;
+
     if (!seamlessStateInitialized) {
       seamlessStateInitialized = true;
-      if (!seamlessState.pdbCode && seamlessState.projectStage === 1
-        && startupPdbId && /^[0-9][A-Za-z0-9]{3}$/.test(startupPdbId)) {
-        startupPdbIdForRestore = startupPdbId.toUpperCase();
-        appState.pdbId = startupPdbIdForRestore;
-        setSharedPdbCode(startupPdbIdForRestore);
-      } else if (!seamlessState.pdbCodePendingWrite) {
+      if (!seamlessState.pdbCodePendingWrite && !startupPdbAwaitingCommit) {
         appState.pdbId = seamlessState.pdbCode;
       }
       if (!seamlessState.biounitIndexPendingWrite) {
@@ -42,7 +48,7 @@
       return;
     }
 
-    if (seamlessState.pdbCode !== appState.pdbId && !seamlessState.pdbCodePendingWrite) {
+    if (seamlessState.pdbCode !== appState.pdbId && !seamlessState.pdbCodePendingWrite && !startupPdbAwaitingCommit) {
       cancelSharedCifWrite();
       appState.pdbId = seamlessState.pdbCode;
       appState.assemblies = [];
@@ -50,13 +56,16 @@
       appState.structureReady = false;
       appState.loading = false;
       appState.error = '';
-      returnToStage1();
+      clearStructureDependentState();
       return;
     }
 
     if (seamlessState.biounitIndex !== appState.biounitIndex) {
       appState.biounitIndex = seamlessState.biounitIndex;
-      if (appState.stage === 2) returnToStage1();
+      appState.assemblies = [];
+      appState.assemblyId = '';
+      appState.structureReady = false;
+      clearStructureDependentState();
     }
   });
 
@@ -66,7 +75,7 @@
   });
 
   $effect(() => {
-    if (appState.stage !== 2 || !seamlessState.rangesReady) return;
+    if (appState.stage < 2 || !seamlessState.rangesReady) return;
     if (seamlessState.rangeRevision > appliedRangeRevision) {
       appliedRangeRevision = seamlessState.rangeRevision;
       appState.rows = cloneRangeRows(seamlessState.rangeRows);
@@ -263,6 +272,14 @@
     returnToStage2();
   }
 
+  async function backToStackings(): Promise<boolean> {
+    if (!await deactivateProjectDecisionAndWait('threshold_edits')) {
+      seamlessState.syncNotice = 'The threshold decision could not be deactivated. Review the shared project and try again.';
+      return false;
+    }
+    return true;
+  }
+
   async function continueToStage4(): Promise<void> {
     const stackings = seamlessState.computed.stackings;
     const selection = seamlessState.projectSnapshot.stacking_selection;
@@ -334,7 +351,6 @@
     if (!viewer) return;
     if (appState.stage >= 4 && !seamlessState.ready) {
       preparedViewerActive = true;
-      preparedViewerKey = 'pending';
       return;
     }
     if (!seamlessState.ready) return;
@@ -460,7 +476,7 @@
   </header>
 
   <div class="workspace">
-    <aside class="sidebar" inert={!seamlessState.ready}>
+    <aside class="sidebar" inert={!seamlessState.ready || (appState.stage > 1 && appState.stage <= 3 && !appState.structureReady)}>
       <div class="stage-progress" aria-label="Workflow progress">
         <div class:current={appState.stage === 1} class:complete={appState.stage > 1} class="progress-step">
           <span class="progress-number">{appState.stage > 1 ? '✓' : '01'}</span>
@@ -503,14 +519,17 @@
         <div class="viewer-error" role="alert"><strong>{issue.name} {issue.state}</strong><span>{issue.message}</span></div>
       {/each}
 
-      {#if appState.stage === 1 || !appState.structureReady}
+      {#if appState.stage > 1 && appState.stage <= 3 && (!appState.structureReady || appState.loading)}
+        <div hidden><Stage1Structure {viewer} startupPdbId={null} autoContinue={false} onContinue={proceedToRanges} /></div>
+      {/if}
+      {#if appState.stage === 1}
         <Stage1Structure {viewer} startupPdbId={startupPdbIdForRestore} autoContinue={false} onContinue={proceedToRanges} />
       {:else if appState.stage === 2}
         <Stage2Ranges onBack={goBack} onComplete={complete} />
       {:else if appState.stage === 3}
         <Stage3Stackings onBack={backToRanges} onContinue={continueToStage4} />
       {:else if appState.stage === 4}
-        <Stage4BestFits onBack={() => { appState.stage = 3; }} />
+        <Stage4BestFits onBack={backToStackings} />
       {:else}
         <section class="stage-content" aria-live="polite">
           <div class="eyebrow">Stage {appState.stage}</div>
@@ -529,9 +548,9 @@
       </div>
       <div class="viewer-stage">
         <Viewer onReady={handleViewerReady} onError={(message) => viewerError = message} onPick={handlePick} />
-        {#if appState.stage >= 4 && seamlessState.computedFreshness.range_pdbs_aa !== true}
+        {#if seamlessState.ready && appState.stage >= 4 && seamlessState.computedFreshness.range_pdbs_aa !== true}
           <div class="viewer-empty"><strong>Preparing all-atom structure…</strong><span>Waiting for fresh prepared range PDBs.</span></div>
-        {:else if appState.stage < 4 && !appState.structureReady}
+        {:else if seamlessState.ready && appState.stage < 4 && !appState.structureReady}
           <div class="viewer-empty" class:viewer-empty-loading={appState.loading}>
             <div class="empty-illustration">
               <div class="molecule-orbit orbit-one"></div><div class="molecule-orbit orbit-two"></div>

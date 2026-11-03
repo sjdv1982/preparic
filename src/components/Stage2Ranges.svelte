@@ -8,6 +8,33 @@
   let showAllErrors = $state(false);
   let issues = $derived(validateRows(appState.rows, appState.chains, showAllErrors));
 
+  function hasCurrentRangeDecision(): boolean {
+    const ranges = seamlessState.projectSnapshot.ranges;
+    if (!ranges || typeof ranges !== 'object' || !('active' in ranges) || ranges.active !== true
+      || seamlessState.pendingInputs.includes('ranges')) return false;
+    const currentRows = (ranges as { rows?: Array<{ chain: string; start: number; end: number }> }).rows;
+    const localRows = appState.rows.map(row => ({ chain: row.chain, start: Number(row.start), end: Number(row.end) }));
+    if (!Array.isArray(currentRows) || currentRows.length === 0
+      || JSON.stringify(currentRows) !== JSON.stringify(localRows)) return false;
+    return !currentRows.some(row => {
+      const chain = appState.chains.find(item => item.name === row.chain);
+      if (!chain) return true;
+      let observed = 0;
+      for (const resid of chain.seqIds) if (resid >= row.start && resid <= row.end) observed += 1;
+      return observed !== row.end - row.start + 1;
+    });
+  }
+
+  let canComplete = $derived(
+    seamlessState.ready
+    && seamlessState.rangesReady
+    && seamlessState.computedFreshness.stackings === true
+    && appState.stackings.length > 0
+    && appState.rows.length > 0
+    && validateRows(appState.rows, appState.chains).length === 0
+    && hasCurrentRangeDecision()
+  );
+
   function finish() {
     appState.rows = appState.rows.map(normalizeRow);
     showAllErrors = true;
@@ -49,6 +76,6 @@
 
   <div class="stage-footer stage-footer-split">
     <button class="button button-secondary" onclick={onBack}><span aria-hidden="true">←</span> Back</button>
-    <button class="button button-primary" onclick={finish}>Complete <span aria-hidden="true">✓</span></button>
+    <button class="button button-primary" onclick={finish} disabled={!canComplete}>Complete <span aria-hidden="true">✓</span></button>
   </div>
 </section>

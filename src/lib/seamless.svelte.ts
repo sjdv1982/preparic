@@ -376,8 +376,10 @@ function updateReady(): void {
     seamlessState.status = 'waiting-for-shares';
     return;
   }
-  if (!requiredEditShares.every(key => received.has(key))
-    || !requiredComputedShares.every(key => received.has(key))) {
+  // An empty stage 1 must stay recoverable even when structure_id cannot be computed yet.
+  const structureIdReadRequired = !(seamlessState.projectStage === 1 && !seamlessState.pdbCode)
+    && !requiredComputedShares.every(key => received.has(key));
+  if (!requiredEditShares.every(key => received.has(key)) || structureIdReadRequired) {
     seamlessState.ready = false;
     seamlessState.status = 'waiting-for-shares';
     return;
@@ -391,6 +393,12 @@ function updateReady(): void {
 
 function suspendForDisconnect(): void {
   if (!hasConnectedBefore || seamlessState.status === 'disconnected') return;
+  if (!pendingStructureCommit) {
+    pendingCif = undefined;
+    pendingPdbCode = undefined;
+    seamlessState.pdbCodePendingWrite = false;
+    clearPendingInput('pdbcode');
+  }
   structureConnectionRevision += 1;
   seamlessState.ready = false;
   seamlessState.status = 'disconnected';
@@ -1215,7 +1223,6 @@ export function sharedStructureTargetIsCurrent(target: SharedStructureTarget): b
   const codeCell = client?.pdbcode;
   const cifCell = client?.['cif.cif'];
   return target.liveAtIssue
-    && target.stageAtIssue === 1
     && seamlessState.ready
     && seamlessState.status === 'live'
     && seamlessState.projectStage === target.stageAtIssue
@@ -1303,6 +1310,7 @@ export function cancelSharedCifWrite(): void {
 }
 
 export function setSharedPdbCode(value: string): boolean {
+  if (!seamlessState.ready || seamlessState.status !== 'live' || seamlessState.projectStage !== 1) return false;
   const code = value.trim().toUpperCase();
   pendingPdbCode = code;
   seamlessState.pdbCodePendingWrite = true;

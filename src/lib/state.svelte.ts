@@ -69,11 +69,15 @@ export function invalidateStackingState(staleRevision: number): void {
   appState.staleStackingRevision = staleRevision;
 }
 
-export function returnToStage1(): void {
+export function clearStructureDependentState(): void {
   appState.rows = [];
   appState.activeCell = null;
   appState.chains = [];
   appState.showSidechainSticks = false;
   clearStackingState();
+}
+
+export function returnToStage1(): void {
+  clearStructureDependentState();
   appState.stage = 1;
 }
