@@ -132,6 +132,13 @@
     save(next);
   }
 
+  function explainInvalidDraft(value: string): void {
+    const normalized = value.trim();
+    message = normalized !== '' && !validateThresholdValue(normalized)
+      ? 'Enter a finite positive value with at most two decimal places.'
+      : '';
+  }
+
   function revertCell(group: 'pairs' | 'bases', index: number, key: string): void {
     if (!edits || !computedFresh) return;
     const source = computedValue(edits[group][index] as Record<string, any>, key);
@@ -246,11 +253,11 @@
               <th scope="row">frag-{row.fragment}</th><td>{row.sequence}</td><td>{residueText}{fitInfo ? ` · conformer ${fitInfo.conformer}` : ''}</td>
               <td>{fitInfo && Array.isArray(fitInfo.grid) ? Number(fitInfo.rmsd ?? NaN).toFixed(2) + ' Å' : '—'}</td>
               <td>{comp1 ?? '—'} / {comp2 ?? '—'}</td>
-              <td><input aria-label={`Fragment ${row.fragment} nucleotide 1 ovRMSD`} value={row.nuc1_ovrmsd ?? ''} onchange={event => editValue('bases', index, 'nuc1_ovrmsd', event.currentTarget.value)} />
+              <td><input aria-label={`Fragment ${row.fragment} nucleotide 1 ovRMSD`} value={row.nuc1_ovrmsd ?? ''} oninput={event => explainInvalidDraft(event.currentTarget.value)} onchange={event => editValue('bases', index, 'nuc1_ovrmsd', event.currentTarget.value)} />
                 {#if row.nuc1_ovrmsd !== comp1 && comp1 !== null}<span class="stage4-diff" title="Differs from computed">●</span>{/if}
                 {#if isWarning(row.nuc1_ovrmsd)}<small class="stage4-warning">Above 10 Å</small>{/if}
                 <button class="stage4-revert" aria-label={`Revert fragment ${row.fragment} nucleotide 1 to computed`} disabled={!computedFresh || row.nuc1_ovrmsd === comp1} onclick={() => revertCell('bases', index, 'nuc1_ovrmsd')}>↶</button></td>
-              <td><input aria-label={`Fragment ${row.fragment} nucleotide 2 ovRMSD`} value={row.nuc2_ovrmsd ?? ''} onchange={event => editValue('bases', index, 'nuc2_ovrmsd', event.currentTarget.value)} />
+              <td><input aria-label={`Fragment ${row.fragment} nucleotide 2 ovRMSD`} value={row.nuc2_ovrmsd ?? ''} oninput={event => explainInvalidDraft(event.currentTarget.value)} onchange={event => editValue('bases', index, 'nuc2_ovrmsd', event.currentTarget.value)} />
                 {#if row.nuc2_ovrmsd !== comp2 && comp2 !== null}<span class="stage4-diff" title="Differs from computed">●</span>{/if}
                 {#if isWarning(row.nuc2_ovrmsd)}<small class="stage4-warning">Above 10 Å</small>{/if}
                 <button class="stage4-revert" aria-label={`Revert fragment ${row.fragment} nucleotide 2 to computed`} disabled={!computedFresh || row.nuc2_ovrmsd === comp2} onclick={() => revertCell('bases', index, 'nuc2_ovrmsd')}>↶</button></td>
@@ -262,11 +269,11 @@
             <tr class:clipped={!isKept(row.down) || !isKept(row.up)} onmouseenter={() => appState.stage4OverlayFragments = [row.down, row.up]} onmouseleave={() => appState.stage4OverlayFragments = []}>
               <th scope="row">{row.down} → {row.up}</th><td>{row.sequence}</td><td>Dinucleotide pair</td><td>—</td>
               <td>{comp1 ?? '—'} / {comp2 ?? '—'}</td>
-              <td><input aria-label={`Pair ${row.down}-${row.up} ovRMSD`} value={row.ovrmsd ?? ''} onchange={event => editValue('pairs', index, 'ovrmsd', event.currentTarget.value)} />
+              <td><input aria-label={`Pair ${row.down}-${row.up} ovRMSD`} value={row.ovrmsd ?? ''} oninput={event => explainInvalidDraft(event.currentTarget.value)} onchange={event => editValue('pairs', index, 'ovrmsd', event.currentTarget.value)} />
                 {#if row.ovrmsd !== comp1 && comp1 !== null}<span class="stage4-diff" title="Differs from computed">●</span>{/if}
                 {#if isWarning(row.ovrmsd)}<small class="stage4-warning">Above 10 Å</small>{/if}
                 <button class="stage4-revert" aria-label={`Revert pair ${row.down}-${row.up} ovRMSD to computed`} disabled={!computedFresh || row.ovrmsd === comp1} onclick={() => revertCell('pairs', index, 'ovrmsd')}>↶</button></td>
-              <td><input aria-label={`Pair ${row.down}-${row.up} cRMSD`} value={row.crmsd ?? ''} onchange={event => editValue('pairs', index, 'crmsd', event.currentTarget.value)} />
+              <td><input aria-label={`Pair ${row.down}-${row.up} cRMSD`} value={row.crmsd ?? ''} oninput={event => explainInvalidDraft(event.currentTarget.value)} onchange={event => editValue('pairs', index, 'crmsd', event.currentTarget.value)} />
                 {#if row.crmsd !== comp2 && comp2 !== null}<span class="stage4-diff" title="Differs from computed">●</span>{/if}
                 {#if isWarning(row.crmsd)}<small class="stage4-warning">Above 10 Å</small>{/if}
                 <button class="stage4-revert" aria-label={`Revert pair ${row.down}-${row.up} cRMSD to computed`} disabled={!computedFresh || row.crmsd === comp2} onclick={() => revertCell('pairs', index, 'crmsd')}>↶</button></td>
