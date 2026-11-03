@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import Stage4BestFits from './Stage4BestFits.svelte';
   import {
     seamlessState,
@@ -43,7 +44,8 @@
   $effect(() => {
     const marker = seamlessState.projectSnapshot.gaussian_classes;
     const writePending = seamlessState.pendingInputs.includes('gaussian_classes');
-    classDraft = reconcileGaussianClassDraft(marker, classDraft, writePending);
+    // Reconcile shared updates without subscribing to the draft we replace.
+    classDraft = reconcileGaussianClassDraft(marker, untrack(() => classDraft), writePending);
   });
 
   $effect(() => {
