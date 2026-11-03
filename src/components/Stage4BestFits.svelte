@@ -215,7 +215,7 @@
             {@const fragmentInfo = inventory.fragments.find(item => item.number === row.fragment)}
             {@const fitInfo = seamlessState.computedFreshness.best_fits === true ? bestFits?.rows?.find((item: any) => item.key === fragmentInfo?.key) : null}
             {@const residueText = fragmentInfo?.residues?.map(item => `${item.chain}:${item.resid}${item.insertion_code}`).join(' / ') ?? '—'}
-            <tr class:clipped={!isKept(row.fragment)} onmouseenter={() => appState.stage4OverlayKey = row.fragment} onmouseleave={() => appState.stage4OverlayKey = null}>
+            <tr class:clipped={!isKept(row.fragment)} onmouseenter={() => appState.stage4OverlayFragments = [row.fragment]} onmouseleave={() => appState.stage4OverlayFragments = []}>
               <th scope="row">frag-{row.fragment}</th><td>{row.sequence}</td><td>{residueText}{fitInfo ? ` · conformer ${fitInfo.conformer}` : ''}</td>
               <td>{fitInfo && Array.isArray(fitInfo.grid) ? Number(fitInfo.rmsd ?? NaN).toFixed(2) + ' Å' : '—'}</td>
               <td>{comp1 ?? '—'} / {comp2 ?? '—'}</td>
@@ -232,7 +232,7 @@
           {#each edits.pairs as row, index (`pair-${row.down}-${row.up}`)}
             {@const comp1 = computedValue(row, 'ovrmsd')}
             {@const comp2 = computedValue(row, 'crmsd')}
-            <tr class:clipped={!isKept(row.down) || !isKept(row.up)} onmouseenter={() => appState.stage4OverlayKey = row.down} onmouseleave={() => appState.stage4OverlayKey = null}>
+            <tr class:clipped={!isKept(row.down) || !isKept(row.up)} onmouseenter={() => appState.stage4OverlayFragments = [row.down, row.up]} onmouseleave={() => appState.stage4OverlayFragments = []}>
               <th scope="row">{row.down} → {row.up}</th><td>{row.sequence}</td><td>Dinucleotide pair</td><td>—</td>
               <td>{comp1 ?? '—'} / {comp2 ?? '—'}</td>
               <td><input aria-label={`Pair ${row.down}-${row.up} ovRMSD`} value={row.ovrmsd ?? ''} onchange={event => editValue('pairs', index, 'ovrmsd', event.currentTarget.value)} />

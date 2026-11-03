@@ -384,21 +384,26 @@
       const inventory = seamlessState.computed.fragments as any;
       const referencePdbs = seamlessState.computed.reference_fragment_pdbs as any;
       const fits = seamlessState.computed.best_fits as any;
-      const overlayNumber = appState.stage === 4 ? appState.stage4OverlayKey : null;
-      const fragment = overlayNumber && Array.isArray(inventory?.fragments)
-        ? inventory.fragments.find((item: any) => item.number === overlayNumber) : null;
-      const reference = fragment && seamlessState.computedFreshness.reference_fragment_pdbs === true
-        ? referencePdbs?.rows?.find((item: any) => item.key === fragment.key)?.pdb : null;
-      const bestfit = fragment && seamlessState.computedFreshness.best_fits === true
-        ? fits?.rows?.find((item: any) => item.key === fragment.key)?.pdb : null;
-      const overlays = [
-        typeof reference === 'string' ? { label: `Reference ${fragment.key}`, pdb: reference } : null,
-        typeof bestfit === 'string' ? { label: `Best fit ${fragment.key}`, pdb: bestfit } : null,
-      ].filter((item): item is { label: string; pdb: string } => item !== null);
+      const overlayNumbers = appState.stage === 4 ? appState.stage4OverlayFragments : [];
+      const fragments = Array.isArray(inventory?.fragments)
+        ? overlayNumbers.map(number => inventory.fragments.find((item: any) => item.number === number))
+          .filter((item: any) => item && typeof item.key === 'string')
+        : [];
+      const overlays: { label: string; pdb: string }[] = [];
+      for (const fragment of fragments) {
+        if (seamlessState.computedFreshness.reference_fragment_pdbs === true) {
+          const reference = referencePdbs?.rows?.find((item: any) => item.key === fragment.key)?.pdb;
+          if (typeof reference === 'string') overlays.push({ label: `Reference ${fragment.key}`, pdb: reference });
+        }
+        if (seamlessState.computedFreshness.best_fits === true) {
+          const bestfit = fits?.rows?.find((item: any) => item.key === fragment.key)?.pdb;
+          if (typeof bestfit === 'string') overlays.push({ label: `Best fit ${fragment.key}`, pdb: bestfit });
+        }
+      }
       const loadKey = JSON.stringify([
         seamlessState.pdbCode.toLowerCase(), share.range_specs,
         share.pdbs.map((item: any) => [item.range, item.name, item.pdb]),
-        overlayNumber, overlays,
+        overlayNumbers, overlays,
       ]);
       if (loadKey === preparedViewerKey) return;
       preparedViewerKey = loadKey;
