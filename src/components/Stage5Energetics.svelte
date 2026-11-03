@@ -63,6 +63,7 @@
     ['detect_stacking_bestfit', 'gaussian_scores_transformer'].includes(issue.name) && issue.state === 'failed'));
   let matrixError = $derived.by(() => {
     if (!matrixDraft || !rows || !anchors) return 'The current clip or selected anchors are not ready.';
+    if (!energeticsFresh) return null;
     for (const anchor of anchors) {
       for (const lock of anchor.locks) {
         const pair = rowEnergy(anchor.range, lock.fragment, 'reference');
@@ -211,12 +212,12 @@
 
   async function recompute(): Promise<void> {
     if (!rows || !anchors || !energeticsFresh || !energetics) {
-      const failed = anchors?.find(anchor => anchor.locks.some(lock => {
+      const failed = energeticsFresh && isRecord(energetics) ? anchors?.find(anchor => anchor.locks.some(lock => {
         const reference = rowEnergy(anchor.range, lock.fragment, 'reference');
         const bestfit = rowEnergy(anchor.range, lock.fragment, 'bestfit');
         return ![reference, bestfit].every(value => isRecord(value) && value.error == null
           && typeof value.energy === 'number' && Number.isFinite(value.energy));
-      }));
+      })) : undefined;
       message = failed
         ? `Selected anchor ${failed.resid} in ${failed.range} has a scoring error. Deselect it in stage 3 to continue.`
         : 'Wait for fresh energetics and the current selected anchors before recomputing.';
