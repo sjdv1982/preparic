@@ -56,6 +56,7 @@ button { color: inherit; }
 .stage5-status, .stage5-gate { color: #b9c8d9; background: #132238; border: 1px solid #29415d; border-radius: 8px; padding: 10px 12px; font-size: 12px; }
 .stage5-error { color: #ffd4cf; background: #3a2024; border: 1px solid #78434b; border-radius: 8px; padding: 10px 12px; font-size: 12px; }
 .stage5-energy-wrap, .stage5-matrix-wrap { overflow: auto; border: 1px solid #293c54; border-radius: 8px; margin-bottom: 18px; }
+.stage5-energy-wrap { flex-shrink: 0; }
 .stage5-energy-table, .stage5-matrix { border-collapse: collapse; width: 100%; min-width: 760px; font-size: 11px; }
 .stage5-energy-table th, .stage5-energy-table td, .stage5-matrix th, .stage5-matrix td { border-bottom: 1px solid #263951; padding: 7px 8px; text-align: center; }
 .stage5-energy-table thead, .stage5-matrix thead { color: #c8d7e8; background: #17283e; }
