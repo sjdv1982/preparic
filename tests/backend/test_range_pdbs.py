@@ -36,6 +36,19 @@ def test_original_deployment_selections(cif_text):
     ]
 
 
+def test_in_process_range_extraction_does_not_require_module_globals(cif_text, monkeypatch):
+    import range_pdbs
+
+    # Delayed/in-process execution may retain the function body without its
+    # original module namespace. The backbone cutoff must remain available.
+    monkeypatch.delattr(range_pdbs, "MAX_RNA_BACKBONE_BOND_DISTANCE")
+    result = _ranges_to_pdb(cif_text, {"ranges": [
+        {"chain": "A", "start": 1, "end": 2},
+    ]})
+    assert len(result) == 1
+    assert residues(result[0]) == [("A", 1), ("A", 2)]
+
+
 @pytest.mark.parametrize("cif,specs", [
     ("not parsed", {"ranges": []}),
     ("", {"ranges": [{"chain": "A", "start": 1, "end": 4}]}),
@@ -169,3 +182,41 @@ def test_numbered_folder_contains_raw_pdb_bytes(expected_pdbs):
 def test_folder_requires_list(value):
     with pytest.raises(ValueError, match="must be provided as a list"):
         _pdbs_to_folder(value)
+
+
+@pytest.mark.parametrize("bond_distance,accepted", [(2.1, True), (2.3, False)],
+                         ids=["below-shared-2.2-cutoff", "above-shared-2.2-cutoff"])
+def test_consecutive_rna_labels_respect_shared_backbone_distance(cif_text, bond_distance, accepted):
+    """Preparic must reject the 2.3 Å link that Alaric's 2.2 Å rule rejects."""
+    data = MMCIF2Dict(StringIO(cif_text))
+
+    def atom_index(residue, name):
+        matches = [index for index, (chain, seq, atom) in enumerate(zip(
+            data["_atom_site.label_asym_id"], data["_atom_site.label_seq_id"],
+            data["_atom_site.label_atom_id"], strict=True,
+        )) if chain == "A" and seq == str(residue) and atom.replace("*", "'") == name]
+        assert len(matches) == 1
+        return matches[0]
+
+    oxygen = atom_index(1, "O3'")
+    phosphorus = atom_index(2, "P")
+    # Keep labels 1→2 consecutive and alter only the connecting phosphorus.
+    # An axis-aligned displacement fixes the intended distance independently
+    # of the original crystallographic bond direction or length.
+    for axis in "xyz":
+        field = f"_atom_site.Cartn_{axis}"
+        coordinate = float(data[field][oxygen])
+        data[field][phosphorus] = str(coordinate + (bond_distance if axis == "x" else 0.0))
+    writer = MMCIFIO()
+    writer.set_dict(data)
+    output = StringIO()
+    writer.save(output)
+    specs = {"schema": 1, "pdbcode": "1B7F", "biounit": 1,
+             "rows": [{"chain": "A", "start": 1, "end": 2}]}
+    if accepted:
+        extracted = _ranges_to_pdb(output.getvalue(), specs)
+        assert len(extracted) == 1
+        assert residues(extracted[0]) == [("A", 1), ("A", 2)]
+    else:
+        with pytest.raises(ValueError, match=r"(?i)(break|continu|connect|bond)"):
+            _ranges_to_pdb(output.getvalue(), specs)

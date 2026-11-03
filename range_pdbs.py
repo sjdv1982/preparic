@@ -1,5 +1,7 @@
 """Range extraction and PDB-file materialization transformers."""
 
+MAX_RNA_BACKBONE_BOND_DISTANCE = 2.2
+
 
 def _ranges_to_pdb(cif: str, ranges: dict) -> list[str]:
     """Extract selected CIF ranges as PDB text, validating polymer annotations."""
@@ -10,6 +12,10 @@ def _ranges_to_pdb(cif: str, ranges: dict) -> list[str]:
 
     from Bio.PDB import MMCIFParser, PDBIO
     import numpy as np
+
+    # Keep this value local: Seamless may execute this function from its body
+    # without the module globals that normally accompany an in-process call.
+    max_rna_backbone_bond_distance = 2.2
 
     # T0 now publishes the canonical S5 envelope. Keep the legacy field as a
     # read-only compatibility path for callers outside the shared project.
@@ -249,7 +255,10 @@ def _ranges_to_pdb(cif: str, ranges: dict) -> list[str]:
                     phosphorus = after_atoms.get("P")
                     if oxygen is not None and phosphorus is not None:
                         bond_distance = float(oxygen - phosphorus)
-                        if not np.isfinite(bond_distance) or bond_distance > 2.5:
+                        if (
+                            not np.isfinite(bond_distance)
+                            or bond_distance > max_rna_backbone_bond_distance
+                        ):
                             raise ValueError(
                                 f"RNA range {index + 1} chain {requested_chain!r} has a chain break "
                                 f"between residues {before.id[1]} and {after.id[1]}."
