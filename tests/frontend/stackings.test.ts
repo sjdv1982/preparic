@@ -5,7 +5,9 @@ import {
   normalizeStackings,
   observeStage2RangeRows,
   resolveSelectedStackings,
+  resolveStackingParticipants,
   stackingKey,
+  stackingRowsAtResidue,
   uniqueStackingParticipantRanges,
   type Stage2RangeObservation,
 } from '../../src/lib/stackings';
@@ -222,6 +224,28 @@ describe('stacking viewer participant mapping', () => {
       { rna: { ...rna }, protein: anotherProtein, rnaCentroid: [0, 0, 0], proteinCentroid: [1, 0, 0] },
     ];
     expect(uniqueStackingParticipantRanges(inputs)).toEqual([rna, protein, anotherProtein]);
+  });
+});
+
+describe('stacking hover matching', () => {
+  const chains: ChainInfo[] = [
+    { name: 'A', labelAsymId: 'A', instanceId: '1', seqIds: new Set([1, 4, 5, 8]), seqMin: 1, seqMax: 8 },
+    { name: 'B', labelAsymId: 'B', instanceId: '1', seqIds: new Set([20, 30, 40]), seqMin: 20, seqMax: 40 },
+  ];
+  const rows = [
+    rangeRow({ chain: 'A', start: '1', end: '8' }),
+    rangeRow({ id: 'protein-b', chain: 'B', start: '20', end: '40' }),
+  ];
+
+  it('resolves participants for unselected rows and maps hovered residues back to rows', () => {
+    const list = [stacking({ protein_resid: 30 }), stacking({ rna_resid: 5, protein_resid: 30 }), stacking({ protein_resid: 99 })];
+    const participants = resolveStackingParticipants(list, rows, chains);
+    expect(participants[2]).toBeNull();
+    const protein = { labelAsymId: 'B', instanceId: '1', labelSeqId: 30 };
+    expect(stackingRowsAtResidue(participants, protein)).toEqual([0, 1]);
+    expect(stackingRowsAtResidue(participants, { labelAsymId: 'A', instanceId: '1', labelSeqId: 5 })).toEqual([1]);
+    expect(stackingRowsAtResidue(participants, { ...protein, instanceId: '2' })).toEqual([]);
+    expect(stackingRowsAtResidue(participants, { ...protein, labelSeqId: 31 })).toEqual([]);
   });
 });
 

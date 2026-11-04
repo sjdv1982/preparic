@@ -10,12 +10,12 @@
   import { cancelSharedCifWrite, deactivateProjectDecisionAndWait, prepareProjectTransition, seamlessState, setEnergyThresholdEditsAwaited, setProjectDecisionAwaited, setSharedBiounitIndex, setSharedCif, setSharedPdbCode, setSharedRangeRows, setSharedStackingSelectionAndWait, waitForShareWrite } from './lib/seamless.svelte';
   import { findChain } from './lib/chains';
   import { cloneRangeRows, updateRow, validateRows } from './lib/ranges';
-  import { mergeStackings, observeStage2RangeRows, resolveSelectedStackings } from './lib/stackings';
+  import { mergeStackings, observeStage2RangeRows, resolveSelectedStackings, resolveStackingParticipants, stackingRowsAtResidue } from './lib/stackings';
 import { canContinueStage4, canEnterStage4, clipForSelectedAnchors, makeThresholdSkeleton, selectedCandidateGroups, validClipForCandidates, validateThresholdEdits } from './lib/stage4';
   import { adaptInteractionMatrix, candidateAnchors, makeInteractionMatrix, recomputeInteractionMatrix, reconcileEnergyThresholdEdits, stage5CanAdvance, stage5Rows, type Stage5S14 } from './lib/stage5';
   import { markerIsWellFormed } from './lib/project-state';
   import { classMarkerForContinue, selectedGaussianKeys } from './lib/stage6';
-  import type { ChainKey, PickInfo, RangeRow, RangeSpec } from './lib/types';
+  import type { ChainKey, HoverInfo, PickInfo, RangeRow, RangeSpec } from './lib/types';
   import type { MolViewer } from './lib/molstar/viewer';
 
   const startupQuery = new URLSearchParams(window.location.search);
@@ -138,6 +138,41 @@ import { canContinueStage4, canEnterStage4, clipForSelectedAnchors, makeThreshol
       end: Math.max(start, end),
     };
   }
+
+  function handleViewerHover(hover: HoverInfo | null) {
+    const rows = hover && appState.stage === 3
+      ? stackingRowsAtResidue(resolveStackingParticipants(appState.stackings, appState.rows, appState.chains), hover)
+        .filter(row => appState.stackingSelection[row] === true)
+      : [];
+    const current = appState.viewerHoveredStackings;
+    if (rows.length !== current.length || rows.some((row, index) => row !== current[index])) {
+      appState.viewerHoveredStackings = rows;
+    }
+  }
+
+  let tableHighlightActive = false;
+  $effect(() => {
+    const hovered = appState.stage === 3 ? appState.tableHoveredStacking : null;
+    const row = hovered !== null && appState.stackingSelection[hovered] === true ? hovered : null;
+    if (!viewer) return;
+    const participants = row === null
+      ? undefined
+      : resolveStackingParticipants(appState.stackings, appState.rows, appState.chains)[row];
+    if (participants) {
+      viewer.highlightRanges([participants.rna, participants.protein]);
+      tableHighlightActive = true;
+    } else if (tableHighlightActive) {
+      viewer.highlightRanges([]);
+      tableHighlightActive = false;
+    }
+  });
+
+  $effect(() => {
+    if (appState.stage !== 3) {
+      appState.viewerHoveredStackings = [];
+      appState.tableHoveredStacking = null;
+    }
+  });
 
   function handlePick(pick: PickInfo) {
     if (!seamlessState.ready || appState.stage !== 2) return;
@@ -688,7 +723,7 @@ import { canContinueStage4, canEnterStage4, clipForSelectedAnchors, makeThreshol
         <div class="viewer-toolbar-right"><span class="viewer-mode"><span>●</span> {appState.stage >= 4 ? 'Prepared range view' : appState.stage === 1 ? 'Structure view' : appState.stage === 2 ? 'Pick mode' : 'Interaction review'}</span><span class="toolbar-divider"></span><span class="viewer-version">Mol*</span></div>
       </div>
       <div class="viewer-stage">
-        <Viewer onReady={handleViewerReady} onError={(message) => viewerError = message} onPick={handlePick} chainName={hover => findChain(appState.chains, hover.labelAsymId, hover.instanceId)?.name ?? hover.labelAsymId} />
+        <Viewer onReady={handleViewerReady} onError={(message) => viewerError = message} onPick={handlePick} onHover={handleViewerHover} chainName={hover => findChain(appState.chains, hover.labelAsymId, hover.instanceId)?.name ?? hover.labelAsymId} />
         {#if seamlessState.ready && appState.stage >= 4 && seamlessState.computedFreshness.range_pdbs_aa !== true}
           <div class="viewer-empty"><strong>Preparing all-atom structure…</strong><span>Waiting for fresh prepared range PDBs.</span></div>
         {:else if seamlessState.ready && appState.stage < 4 && !appState.structureReady}

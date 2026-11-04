@@ -23,7 +23,12 @@
       </thead>
       <tbody>
         {#each appState.stackings as stacking, index (`${stacking.protein_range_pdb_id}:${stacking.protein_resid}:${stacking.rna_resname}:${stacking.rna_resid}`)}
-          <tr>
+          <tr
+            class:stacking-row-hover={appState.stackingSelection[index] === true
+              && (appState.tableHoveredStacking === index || appState.viewerHoveredStackings.includes(index))}
+            onpointerenter={() => appState.tableHoveredStacking = index}
+            onpointerleave={() => { if (appState.tableHoveredStacking === index) appState.tableHoveredStacking = null; }}
+          >
             <td class="stacking-selection-cell">
               <input
                 type="checkbox"

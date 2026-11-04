@@ -1,5 +1,5 @@
 import { definedRangeRows } from './range-definition';
-import type { ChainInfo, RangeRow, RangeSpec, Stage, Stacking, StackingViewerInput } from './types';
+import type { ChainInfo, PickInfo, RangeRow, RangeSpec, Stage, Stacking, StackingViewerInput } from './types';
 
 export interface StackingTableState {
   stackings: Stacking[];
@@ -202,6 +202,41 @@ function participantRange(
     start: resid,
     end: resid,
   };
+}
+
+export interface StackingParticipants {
+  rna: RangeSpec;
+  protein: RangeSpec;
+}
+
+/** Resolve every detector row's residues (selected or not), index-aligned with `stackings`. */
+export function resolveStackingParticipants(
+  stackings: readonly Stacking[],
+  rangeRows: readonly RangeRow[],
+  chains: readonly ChainInfo[],
+): Array<StackingParticipants | null> {
+  const configuredRows = definedRangeRows(rangeRows);
+  const rnaRow = configuredRows[0];
+  return stackings.map(stacking => {
+    const rna = participantRange(rnaRow, stacking.rna_resid, chains);
+    const protein = participantRange(configuredRows[stacking.protein_range_pdb_id - 1], stacking.protein_resid, chains);
+    return rna && protein ? { rna, protein } : null;
+  });
+}
+
+/** Indices of the stacking rows in which the given residue takes part. */
+export function stackingRowsAtResidue(
+  participants: ReadonlyArray<StackingParticipants | null>,
+  residue: PickInfo,
+): number[] {
+  const matches = (range: RangeSpec) => range.labelAsymId === residue.labelAsymId
+    && range.instanceId === residue.instanceId
+    && range.start === residue.labelSeqId;
+  const rows: number[] = [];
+  participants.forEach((item, index) => {
+    if (item && (matches(item.rna) || matches(item.protein))) rows.push(index);
+  });
+  return rows;
 }
 
 /** Resolve selected detector rows against the same ordered range list sent to Seamless. */

@@ -142,6 +142,7 @@ button { color: inherit; }
 .stacking-table tbody th { background: transparent; color: #dce5f0; font: 500 10px 'DM Mono', monospace; letter-spacing: 0; }
 .stacking-table td { height: 36px; padding: 4px 8px; border-bottom: 1px solid rgba(151, 171, 199, .08); color: #bdc9d8; font: 400 9px 'DM Mono', monospace; }
 .stacking-table tbody tr:last-child th, .stacking-table tbody tr:last-child td { border-bottom: 0; }
+.stacking-table tbody tr.stacking-row-hover { background: rgba(105, 166, 238, .16); box-shadow: inset 2px 0 0 #69a6ee; }
 .stacking-table .stacking-selection-cell { text-align: center; }
 .stacking-table .stacking-range-col { width: 1%; text-align: center; padding-left: 4px; padding-right: 4px; }
 .stacking-selection-cell input { width: 14px; height: 14px; accent-color: #69a6ee; vertical-align: middle; cursor: pointer; }

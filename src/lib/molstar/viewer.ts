@@ -1,9 +1,10 @@
-import { StructureElement, StructureProperties, Unit } from 'molstar/lib/mol-model/structure.js';
+import { StructureElement, StructureProperties, StructureSelection, Unit } from 'molstar/lib/mol-model/structure.js';
 import { MmcifFormat } from 'molstar/lib/mol-model-formats/structure/mmcif.js';
 import { ModelSymmetry } from 'molstar/lib/mol-model-formats/structure/property/symmetry.js';
 import { PluginBehaviors } from 'molstar/lib/mol-plugin/behavior.js';
 import { PluginContext } from 'molstar/lib/mol-plugin/context.js';
 import { DefaultPluginSpec } from 'molstar/lib/mol-plugin/spec.js';
+import { Script } from 'molstar/lib/mol-script/script.js';
 import { Mesh } from 'molstar/lib/mol-geo/geometry/mesh/mesh.js';
 import { MeshBuilder } from 'molstar/lib/mol-geo/geometry/mesh/mesh-builder.js';
 import { addSimpleCylinder } from 'molstar/lib/mol-geo/geometry/mesh/builder/cylinder.js';
@@ -20,7 +21,7 @@ import { chainExpression, complementExpression, rangeExpression, sidechainRangeE
 import { stackingDashSegments, type DashSegment } from './stacking-geometry';
 import { nameChains, type ChainUnitInput } from '../chains';
 import { uniqueStackingParticipantRanges } from '../stackings';
-import type { AssemblyInfo, ChainInfo, HoverInfo, PickInfo, RenderSpec, StackingViewerInput, Vec3 } from '../types';
+import type { AssemblyInfo, ChainInfo, HoverInfo, PickInfo, RangeSpec, RenderSpec, StackingViewerInput, Vec3 } from '../types';
 
 const RENDER_TAG = 'preparic-phase1-render';
 const PREPARED_PDB_TAG = 'preparic-prepared-pdb';
@@ -178,6 +179,20 @@ export class MolViewer {
 
   setOnHover(callback: (hover: HoverInfo | null) => void): void {
     this.onHover = callback;
+  }
+
+  /** Highlight the given residue ranges as if hovered; an empty list clears the highlight. */
+  highlightRanges(ranges: readonly RangeSpec[]): void {
+    const highlights = this.plugin.managers.interactivity.lociHighlights;
+    const structure = this.structureRef?.obj?.data;
+    if (!structure || ranges.length === 0) {
+      highlights.clearHighlights();
+      return;
+    }
+    const selection = Script.getStructureSelection(unionExpression(ranges.map(rangeExpression)), structure);
+    const loci = StructureSelection.toLociWithSourceUnits(selection);
+    if (StructureElement.Loci.isEmpty(loci)) highlights.clearHighlights();
+    else highlights.highlightOnly({ loci }, false);
   }
 
   setOnPick(callback: (pick: PickInfo) => void): void {
