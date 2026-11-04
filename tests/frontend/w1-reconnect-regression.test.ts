@@ -76,12 +76,19 @@ describe('W1 P5/P9 reconnect requires a current-connection read of each result',
     expect(seamlessState.ready).toBe(true);
     expect(seamlessState.projectStage).toBe(3);
     expect(seamlessState.computed.fragments).toEqual(oldPayload);
-    expect(seamlessState.computedFreshness.fragments).not.toBe(true);
     expect(requested.includes('fragments')).toBe(mode === 'failed');
+    expect(seamlessState.computedFreshness.fragments).not.toBe(true);
     expect(Object.values(cells).flatMap(cell => cell.writes)).toEqual([]);
 
     // An actual new delivery on this connection restores freshness without editing decisions.
-    if (mode === 'failed') {
+    if (mode === 'omitted') {
+      cells.fragments.emit(cells.fragments.value);
+      expect(seamlessState.computedFreshness.fragments).not.toBe(true);
+      context.self.onsharelist(Object.keys(cells));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(requested.filter(key => key === 'fragments')).toHaveLength(1);
+      expect(seamlessState.computedFreshness.fragments).toBe(true);
+    } else {
       cells.fragments.emit(cells.fragments.value);
       expect(seamlessState.computedFreshness.fragments).toBe(true);
     }

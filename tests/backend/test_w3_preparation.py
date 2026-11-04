@@ -130,15 +130,33 @@ def _ring_pdb(reference, coordinates, resname, chain, resid):
     return "".join(lines) + "END\n"
 
 
-def _fitted_reference_normal(reference, observed):
+def _kabsch_row_rotation(reference, observed):
+    reference = np.asarray(reference, dtype=np.float32)
+    observed = np.asarray(observed, dtype=np.float32)
     reference = reference - reference.mean(axis=0)
     observed = observed - observed.mean(axis=0)
     left, _, right = np.linalg.svd(reference.T @ observed)
-    correction = np.eye(3)
-    correction[-1, -1] = np.linalg.det(left @ right)
-    row_rotation = left @ correction @ right
-    normal = np.linalg.svd(reference, full_matrices=False)[2][-1] @ row_rotation
-    return normal / np.linalg.norm(normal)
+    if np.linalg.det(left) * np.linalg.det(right) < 0:
+        left[:, -1] *= -1
+    return left @ right
+
+
+def _expected_kabsch_angles(rna_reference, protein_reference, rna_observed, protein_observed):
+    # A7 defines the protein ring frame's z axis as its normal. The reference
+    # PDB coordinates are slightly nonplanar, so their least-squares plane
+    # normal is not the canonical frame axis. Match the delivered float32 PDB
+    # coordinates and evaluate the independent frame transforms in that dtype.
+    rna_observed = np.asarray(rna_observed, dtype=np.float32)
+    protein_observed = np.asarray(protein_observed, dtype=np.float32)
+    protein_to_world = _kabsch_row_rotation(protein_reference, protein_observed)
+    rna_to_reference = _kabsch_row_rotation(rna_observed, rna_reference)
+    displacement = rna_observed.mean(axis=0) - protein_observed.mean(axis=0)
+    protein_frame_displacement = displacement @ protein_to_world.T
+    distance = float(np.linalg.norm(protein_frame_displacement))
+    relative_rotation = rna_to_reference.T @ protein_to_world.T
+    slip = math.degrees(math.acos(np.clip(abs(float(protein_frame_displacement[2])) / distance, 0, 1)))
+    tilt = math.degrees(math.acos(np.clip(abs(float(relative_rotation[2, 2])), 0, 1)))
+    return slip, tilt
 
 
 def test_stage3_descriptors_use_pinned_kabsch_reference_normals():
@@ -161,11 +179,9 @@ def test_stage3_descriptors_use_pinned_kabsch_reference_normals():
     # comparison against the pre-format coordinates.
     a_observed = np.asarray([atom.coord for atom in _atoms(rna)], dtype=float)
     arg_observed = np.asarray([atom.coord for atom in _atoms(protein)], dtype=float)
-    rna_normal = _fitted_reference_normal(a_reference, a_observed)
-    protein_normal = _fitted_reference_normal(arg_reference, arg_observed)
-    displacement = a_observed.mean(axis=0) - arg_observed.mean(axis=0)
-    expected_phi = math.degrees(math.acos(np.clip(abs(displacement @ protein_normal) / np.linalg.norm(displacement), 0, 1)))
-    expected_tilt = math.degrees(math.acos(np.clip(abs(rna_normal @ protein_normal), 0, 1)))
+    expected_phi, expected_tilt = _expected_kabsch_angles(
+        a_reference, arg_reference, a_observed, arg_observed
+    )
     rows = _detect_stacking([rna, protein], ring_references=references)
     assert len(rows) == 1
     assert rows[0]["slip_angle"] == pytest.approx(expected_phi, abs=1e-5)
@@ -196,13 +212,9 @@ def test_guanine_uses_the_pinned_adenine_ring_reference():
     protein = _ring_pdb(arg_text, arg_observed, "ARG", "C", 30)
     g_observed = np.asarray([atom.coord for atom in _atoms(rna)], dtype=float)
     arg_observed = np.asarray([atom.coord for atom in _atoms(protein)], dtype=float)
-    g_normal = _fitted_reference_normal(a_reference, g_observed)
-    protein_normal = _fitted_reference_normal(arg_reference, arg_observed)
-    displacement = g_observed.mean(axis=0) - arg_observed.mean(axis=0)
-    expected_phi = math.degrees(math.acos(np.clip(
-        abs(displacement @ protein_normal) / np.linalg.norm(displacement), 0, 1
-    )))
-    expected_tilt = math.degrees(math.acos(np.clip(abs(g_normal @ protein_normal), 0, 1)))
+    expected_phi, expected_tilt = _expected_kabsch_angles(
+        a_reference, arg_reference, g_observed, arg_observed
+    )
 
     rows = _detect_stacking([rna, protein], ring_references=references)
     assert len(rows) == 1

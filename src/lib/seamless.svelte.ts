@@ -933,13 +933,27 @@ function receiveComputed(key: ShareKey, value: SharedValue): void {
   updateReady();
 }
 
-function hasSharedCell(key: ShareKey, keys: string[]): boolean {
+function hasSharedCell(key: ShareKey, keys: string[], allowUrlFallback = false): boolean {
   const cell = client?.[key];
-  return !!cell && (keys.includes(key) || (typeof cell.url === 'string' && cell.url.length > 0));
+  return !!cell && (keys.includes(key)
+    || (allowUrlFallback && typeof cell.url === 'string' && cell.url.length > 0));
+}
+
+function hasListedShare(key: ShareKey, keys: string[]): boolean {
+  return !!client?.[key] && keys.includes(key);
+}
+
+function detachUnlistedShareReceivers(keys: string[]): void {
+  for (const key of shareReceivers.keys()) {
+    if (keys.includes(key)) continue;
+    const cell = client?.[key];
+    if (cell) cell.onchange = () => undefined;
+    shareReceivers.delete(key);
+  }
 }
 
 async function readInitialComputedShares(keys: string[]): Promise<void> {
-  const available = computedShareKeys.filter(key => hasSharedCell(key, keys) && !!client?.[key]?.url);
+  const available = computedShareKeys.filter(key => hasSharedCell(key, keys, true) && !!client?.[key]?.url);
   const results = await Promise.allSettled(available.map(readShareFresh));
   const failed = results.filter(result => result.status === 'rejected').length;
   if (failed > 0) {
@@ -1165,8 +1179,8 @@ function receiveStackingSelection(value: SharedValue, marker?: number): void {
   seamlessState.stackingSelectionError = '';
 }
 
-function attachShare(key: ShareKey, keys: string[]): void {
-  if (!hasSharedCell(key, keys)) return;
+function attachShare(key: ShareKey, keys: string[], allowUrlFallback = false): void {
+  if (!hasSharedCell(key, keys, allowUrlFallback)) return;
   const cell = client?.[key];
   if (!cell) return;
   const install = (handler: (value: SharedValue) => void) => {
@@ -1295,7 +1309,7 @@ async function resynchronizeShares(keys: string[]): Promise<void> {
     'best_fit_thresholds', 'best_fits', 'energetics', 'energy_thresholds', 'interactions',
     'bestfit_stackings', 'gaussian_validation', 'refe_validation', 'gaussian_scores',
   ];
-  const tasks = ordered.filter(key => hasSharedCell(key, keys)).map(readShareFresh);
+  const tasks = ordered.filter(key => hasListedShare(key, keys)).map(readShareFresh);
   if (pendingStructureCommit && keys.includes('cif.cif')) tasks.push(readPendingCifFresh());
   const results = await Promise.allSettled(tasks);
   const failed = results.filter(result => result.status === 'rejected').length;
@@ -1353,11 +1367,15 @@ function attachShareContext(context: ShareContext): void {
   seamlessState.stackingSelectionPendingWrite = false;
   context.self.onstategraph = receiveStateGraph;
   context.self.onsharelist = keys => {
+    // First-connect computed endpoints can be read by URL even when absent
+    // from this list; after that, each list defines current share membership.
+    const initialShareList = !hasConnectedBefore;
     const reconnect = hasConnectedBefore;
     hasConnectedBefore = true;
     if (reconnect) structureConnectionRevision += 1;
     resyncInProgress = reconnect;
     if (reconnect) {
+      detachUnlistedShareReceivers(keys);
       seamlessState.ready = false;
       seamlessState.computedFreshness = {};
       seamlessState.structureIdReady = false;
@@ -1373,23 +1391,26 @@ function attachShareContext(context: ShareContext): void {
       pendingBackendStackingSelection = undefined;
       seamlessState.stackingSelectionReady = false;
     }
-    attachShare('pdbcode', keys);
-    attachShare('biounit', keys);
-    attachShare('ranges', keys);
+    attachShare('pdbcode', keys, initialShareList);
+    attachShare('biounit', keys, initialShareList);
+    attachShare('ranges', keys, initialShareList);
     // Selection must be observed before stackings so a persisted exact-length
     // value can supersede defaults for the table being attached.
-    attachShare('stacking_selection', keys);
-    attachShare('stackings', keys);
+    attachShare('stacking_selection', keys, initialShareList);
+    attachShare('stackings', keys, initialShareList);
     for (const key of [
       'threshold_edits', 'best_fit_clip', 'interaction_matrix', 'gaussian_classes', 'energy_threshold_edits',
       'range_specs', 'structure_id', 'range_pdbs_aa', 'fragments', 'reference_fragment_pdbs', 'best_fit_thresholds', 'best_fits',
       'energetics', 'energy_thresholds', 'interactions', 'bestfit_stackings', 'gaussian_validation',
       'refe_validation', 'gaussian_scores',
-    ] as const) attachShare(key, keys);
+    ] as const) attachShare(key, keys, initialShareList);
     const cifCell = context['cif.cif'];
     if (cifCell) cifCell.onchange = value => { if (!resyncInProgress) receiveCifCommit(value); };
-    if (!requiredEditShares.every(key => hasSharedCell(key, keys))
-      || !requiredComputedShares.every(key => hasSharedCell(key, keys))) {
+    const hasRequiredShare = (key: ShareKey) => initialShareList
+      ? hasSharedCell(key, keys, true)
+      : hasListedShare(key, keys);
+    if (!requiredEditShares.every(hasRequiredShare)
+      || !requiredComputedShares.every(hasRequiredShare)) {
       seamlessState.status = 'waiting-for-shares';
     }
     if (reconnect && context.self.ws) void resynchronizeShares(keys);
