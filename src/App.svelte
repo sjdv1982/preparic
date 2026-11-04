@@ -688,7 +688,7 @@ import { canContinueStage4, canEnterStage4, clipForSelectedAnchors, makeThreshol
         <div class="viewer-toolbar-right"><span class="viewer-mode"><span>●</span> {appState.stage >= 4 ? 'Prepared range view' : appState.stage === 1 ? 'Structure view' : appState.stage === 2 ? 'Pick mode' : 'Interaction review'}</span><span class="toolbar-divider"></span><span class="viewer-version">Mol*</span></div>
       </div>
       <div class="viewer-stage">
-        <Viewer onReady={handleViewerReady} onError={(message) => viewerError = message} onPick={handlePick} />
+        <Viewer onReady={handleViewerReady} onError={(message) => viewerError = message} onPick={handlePick} chainName={hover => findChain(appState.chains, hover.labelAsymId, hover.instanceId)?.name ?? hover.labelAsymId} />
         {#if seamlessState.ready && appState.stage >= 4 && seamlessState.computedFreshness.range_pdbs_aa !== true}
           <div class="viewer-empty"><strong>Preparing all-atom structure…</strong><span>Waiting for fresh prepared range PDBs.</span></div>
         {:else if seamlessState.ready && appState.stage < 4 && !appState.structureReady}

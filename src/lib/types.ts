@@ -46,6 +46,10 @@ export interface PickInfo extends ChainKey {
   labelSeqId: number;
 }
 
+export interface HoverInfo extends PickInfo {
+  resname: string;
+}
+
 export interface RangeSpec extends ChainKey {
   start: number;
   end: number;

@@ -228,6 +228,7 @@ select.cell-editor { padding-right: 4px; }
 .viewer-shell { position: absolute; z-index: 1; inset: 0; overflow: hidden; }
 .viewer-shell canvas { display: block; width: 100%; height: 100%; outline: none; touch-action: none; }
 .viewer-hint { position: absolute; left: 17px; bottom: 15px; color: #738298; font: 400 9px 'DM Mono', monospace; pointer-events: none; display: flex; align-items: center; gap: 7px; padding: 7px 9px; border-radius: 5px; border: 1px solid rgba(138, 162, 192, .12); background: rgba(12, 19, 29, .64); backdrop-filter: blur(5px); }
+.viewer-tooltip { position: absolute; z-index: 3; transform: translate(14px, 16px); pointer-events: none; white-space: nowrap; padding: 5px 8px; border-radius: 5px; border: 1px solid rgba(138, 162, 192, .28); background: rgba(12, 19, 29, .92); color: #d3deec; font: 500 11px 'DM Mono', monospace; box-shadow: 0 4px 14px rgba(0, 0, 0, .35); }
 .hint-dot { width: 5px; height: 5px; border-radius: 50%; background: #5fa1f2; box-shadow: 0 0 7px rgba(91, 157, 239, .7); }
 .hint-separator { color: #435164; }
 .viewer-empty { position: absolute; z-index: 0; inset: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; color: #8493a6; pointer-events: none; padding-bottom: 32px; }

@@ -20,7 +20,7 @@ import { chainExpression, complementExpression, rangeExpression, sidechainRangeE
 import { stackingDashSegments, type DashSegment } from './stacking-geometry';
 import { nameChains, type ChainUnitInput } from '../chains';
 import { uniqueStackingParticipantRanges } from '../stackings';
-import type { AssemblyInfo, ChainInfo, PickInfo, RenderSpec, StackingViewerInput, Vec3 } from '../types';
+import type { AssemblyInfo, ChainInfo, HoverInfo, PickInfo, RenderSpec, StackingViewerInput, Vec3 } from '../types';
 
 const RENDER_TAG = 'preparic-phase1-render';
 const PREPARED_PDB_TAG = 'preparic-prepared-pdb';
@@ -106,6 +106,8 @@ export class MolViewer {
   private showQueue: Promise<unknown> = Promise.resolve();
   private renderQueue: Promise<unknown> = Promise.resolve();
   private clickSubscription: { unsubscribe(): void } | undefined;
+  private hoverSubscription: { unsubscribe(): void } | undefined;
+  private onHover: (hover: HoverInfo | null) => void = () => undefined;
   private onPick: (pick: PickInfo) => void = () => undefined;
   private onCifDownloaded: (cif: string) => void = () => undefined;
 
@@ -148,11 +150,34 @@ export class MolViewer {
 
         viewer.onPick(pick);
       });
+      viewer.hoverSubscription = plugin.behaviors.interaction.hover.subscribe(event => {
+        const loci = event.current.loci;
+        const location = StructureElement.Loci.is(loci) ? StructureElement.Loci.getFirstLocation(loci) : undefined;
+        if (!location || !Unit.isAtomic(location.unit)) {
+          viewer.onHover(null);
+          return;
+        }
+        const labelSeqId = StructureProperties.residue.label_seq_id(location);
+        if (!Number.isInteger(labelSeqId) || labelSeqId <= 0) {
+          viewer.onHover(null);
+          return;
+        }
+        viewer.onHover({
+          labelAsymId: StructureProperties.chain.label_asym_id(location),
+          instanceId: location.unit.conformation.operator.instanceId,
+          labelSeqId,
+          resname: StructureProperties.atom.label_comp_id(location),
+        });
+      });
       return viewer;
     } catch (error) {
       plugin.dispose();
       throw error;
     }
+  }
+
+  setOnHover(callback: (hover: HoverInfo | null) => void): void {
+    this.onHover = callback;
   }
 
   setOnPick(callback: (pick: PickInfo) => void): void {
@@ -929,6 +954,7 @@ export class MolViewer {
     this.showToken += 1;
     this.renderToken += 1;
     this.clickSubscription?.unsubscribe();
+    this.hoverSubscription?.unsubscribe();
     this.plugin.dispose();
   }
 }
