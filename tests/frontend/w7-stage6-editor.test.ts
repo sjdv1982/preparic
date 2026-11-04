@@ -313,7 +313,7 @@ describe('W7 S18 pending writes and validation freshness', () => {
 
   it('test_s18_prior_put_ack_preserves_newer_component_draft_and_subsequent_edit', () => {
     const component = readFileSync(resolve(process.cwd(), 'src/components/Stage6Gaussian.svelte'), 'utf8');
-    expect(component).toContain('reconcileGaussianClassDraft(marker, classDraft, writePending)');
+    expect(component).toContain('reconcileGaussianClassDraft(marker, untrack(() => classDraft), writePending)');
     expect(component).toContain("seamlessState.pendingInputs.includes('gaussian_classes')");
 
     const first: GaussianClassMarker = { ...classMarker, schema: 1, rows: [{ key, rrm: 90, tilt30: false, disp45: false }] };

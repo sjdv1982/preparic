@@ -417,7 +417,20 @@ def _validate_threshold_edits(edits: object, fragments: object) -> None:
     return None
 
 
-def _valid_clip(clip: object, fragment_count: int, selected_candidates: list[int] | tuple[int, ...] = ()) -> bool:
+def _candidate_groups(selected_candidates: object) -> list[list[int]] | None:
+    if not isinstance(selected_candidates, (list, tuple)):
+        return None
+    if all(type(number) is int for number in selected_candidates):
+        return [[number] for number in selected_candidates]
+    if all(isinstance(group, (list, tuple)) for group in selected_candidates):
+        groups = [list(group) for group in selected_candidates]
+        if any(any(type(number) is not int for number in group) for group in groups):
+            return None
+        return groups
+    return None
+
+
+def _valid_clip(clip: object, fragment_count: int, selected_candidates: object = ()) -> bool:
     if type(clip) is not dict or set(clip) != {"schema", "basis", "clip1", "clip2"} \
         or type(clip.get("schema")) is not int or clip.get("schema") != 1 \
         or type(clip.get("clip1")) is not int or type(clip.get("clip2")) is not int \
@@ -431,17 +444,18 @@ def _valid_clip(clip: object, fragment_count: int, selected_candidates: list[int
         or type(clip["basis"].get("rna")) is not dict
     ):
         return False
-    if not isinstance(selected_candidates, (list, tuple)):
+    groups = _candidate_groups(selected_candidates)
+    if groups is None:
         return False
-    candidates = []
-    for number in selected_candidates:
-        if type(number) is not int or number < 1 or number > fragment_count:
+    for group in groups:
+        if not group or any(number < 1 or number > fragment_count for number in group):
             return False
-        candidates.append(number)
-    return all(clip["clip1"] < number <= fragment_count - clip["clip2"] for number in candidates)
+        if not any(clip["clip1"] < number <= fragment_count - clip["clip2"] for number in group):
+            return False
+    return True
 
 
-def _selected_candidate_numbers(fragments: dict, selection: object, stackings: object) -> list[int]:
+def _selected_candidate_groups(fragments: dict, selection: object, stackings: object) -> list[list[int]]:
     if selection is None or (type(selection) is dict and selection.get("active") is False):
         return []
     if type(selection) is not dict or type(selection.get("schema")) is not int \
@@ -475,30 +489,38 @@ def _selected_candidate_numbers(fragments: dict, selection: object, stackings: o
             raise ValueError(f"A stacking row is missing {exc.args[0]!r}.") from exc
     if selected - available:
         raise ValueError("The stacking selection contains keys outside the fresh stacking table.")
-    numbers = set()
+    numbers: dict[str, set[int]] = {key: set() for key in selected}
     candidates = _candidate_fragments(fragments, stackings)
     for candidate in candidates:
         if type(candidate) is not dict or candidate.get("key") not in selected:
             continue
         match = _FRAGMENT_KEY.fullmatch(str(candidate.get("fragment", "")))
         if match is not None:
-            numbers.add(int(match.group(1)))
-    return sorted(numbers)
+            numbers[candidate["key"]].add(int(match.group(1)))
+    return [sorted(numbers[key]) for key in sorted(numbers)]
 
 
-def _clamp_clip(clip: dict, fragment_count: int, selected_candidates: list[int] | tuple[int, ...]) -> dict:
+def _selected_candidate_numbers(fragments: dict, selection: object, stackings: object) -> list[int]:
+    """Flatten selected candidate groups for legacy diagnostic callers."""
+    return sorted({number for group in _selected_candidate_groups(fragments, selection, stackings)
+                   for number in group})
+
+
+def _clamp_clip(clip: dict, fragment_count: int, selected_candidates: object) -> dict:
     if type(clip) is not dict or type(fragment_count) is not int or fragment_count < 1:
         raise ValueError("Cannot clamp a malformed clip or fragment list.")
     if type(clip.get("clip1")) is not int or type(clip.get("clip2")) is not int \
         or clip["clip1"] < 0 or clip["clip2"] < 0:
         raise ValueError("Clip counts must be nonnegative integers.")
-    candidates = list(selected_candidates)
-    if any(type(number) is not int or not 1 <= number <= fragment_count for number in candidates):
+    groups = _candidate_groups(selected_candidates)
+    if groups is None or any(not group for group in groups):
+        raise ValueError("Selected anchors contain an empty or malformed candidate group.")
+    if any(not 1 <= number <= fragment_count for group in groups for number in group):
         raise ValueError("Selected anchor candidates contain an invalid fragment number.")
     result = dict(clip)
-    if candidates:
-        result["clip1"] = min(clip["clip1"], min(candidates) - 1)
-        result["clip2"] = min(clip["clip2"], fragment_count - max(candidates))
+    if groups:
+        result["clip1"] = min(clip["clip1"], min(max(group) - 1 for group in groups))
+        result["clip2"] = min(clip["clip2"], min(fragment_count - min(group) for group in groups))
     if result["clip1"] + result["clip2"] >= fragment_count:
         result["clip1"] = min(result["clip1"], fragment_count - 1)
         result["clip2"] = min(result["clip2"], fragment_count - result["clip1"] - 1)
@@ -511,7 +533,7 @@ def _clip_fragments(
     thresholds: dict,
     clip: dict,
     fragments: dict,
-    selected_candidates: list[int] | tuple[int, ...] = (),
+    selected_candidates: object = (),
 ) -> dict[str, bytes]:
     """T11: make the kept-only B11 folder without changing source PDB bytes."""
     if thresholds is None or (type(thresholds) is dict and thresholds.get("active") is False):

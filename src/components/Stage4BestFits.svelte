@@ -5,7 +5,7 @@
     cloneThresholdMarker,
     copyComputedThresholds,
     canContinueStage4,
-    selectedCandidateFragments,
+    selectedCandidateGroups,
     thresholdsCompleteForClip,
     validateThresholdEdits,
     validateThresholdValue,
@@ -54,16 +54,25 @@
     if (!record(marker) || !record(marker.selected)) return [] as string[];
     return Object.entries(marker.selected).filter(([, selected]) => selected === true).map(([key]) => key);
   });
-  let candidates = $derived(candidatesFresh && inventory
-    ? selectedCandidateFragments(inventory, selectedKeys, stackingRows) : []);
-  let validatorFailed = $derived(seamlessState.stateGraphErrors.some(issue => issue.name === 'validate_threshold_edits' && issue.state === 'failed'));
   let fragmentCount = $derived(inventory?.fragments?.length ?? 0);
+  let candidateGroups = $derived(candidatesFresh && inventory
+    ? selectedCandidateGroups(inventory, selectedKeys, stackingRows) : []);
+  let clipLimits = $derived.by(() => {
+    const fallback = Math.max(0, fragmentCount - 1);
+    if (!candidateGroups.length) return { clip1: fallback, clip2: fallback };
+    if (candidateGroups.some(group => group.length === 0)) return { clip1: 0, clip2: 0 };
+    return {
+      clip1: Math.min(fallback, ...candidateGroups.map(group => Math.max(...group) - 1)),
+      clip2: Math.min(fallback, ...candidateGroups.map(group => fragmentCount - Math.min(...group))),
+    };
+  });
+  let validatorFailed = $derived(seamlessState.stateGraphErrors.some(issue => issue.name === 'validate_threshold_edits' && issue.state === 'failed'));
   let complete = $derived(!!edits && thresholdsCompleteForClip(edits, fragmentCount, clip));
   let canContinue = $derived(canContinueStage4({
     edits,
     fragmentCount,
     clip,
-    selectedCandidates: candidates,
+    selectedCandidates: candidateGroups,
     energeticsFresh,
     thresholdValidatorFailed: validatorFailed,
   }) && !!inventory && validateThresholdEdits(edits, inventory)
@@ -173,8 +182,9 @@
       message = 'Clip counts must be nonnegative integers and leave at least one fragment.';
       return;
     }
-    if (candidates.some(number => number <= first || number > fragmentCount - last)) {
-      message = 'The clip must keep every candidate fragment of each selected stacking.';
+    if (candidateGroups.some(group => group.length === 0
+      || !group.some(number => number > first && number <= fragmentCount - last))) {
+      message = 'The clip must keep at least one candidate fragment of every selected stacking.';
       return;
     }
     const basis = inventory?.echo;
@@ -225,8 +235,8 @@
   {:else}
     <div class="stage4-toolbar">
       {#if !embedded}<div class="stage4-clip-controls">
-        <label>Clip 5′ <input aria-label="Clip fragments from 5 prime end" inputmode="numeric" value={clip1Draft} onchange={event => clip1Draft = event.currentTarget.value} disabled={seamlessState.pendingInputs.includes('best_fit_clip')} /></label>
-        <label>Clip 3′ <input aria-label="Clip fragments from 3 prime end" inputmode="numeric" value={clip2Draft} onchange={event => clip2Draft = event.currentTarget.value} disabled={seamlessState.pendingInputs.includes('best_fit_clip')} /></label>
+        <label>Clip 5′ <input aria-label="Clip fragments from 5 prime end" inputmode="numeric" max={clipLimits.clip1} value={clip1Draft} onchange={event => clip1Draft = event.currentTarget.value} disabled={seamlessState.pendingInputs.includes('best_fit_clip')} /></label>
+        <label>Clip 3′ <input aria-label="Clip fragments from 3 prime end" inputmode="numeric" max={clipLimits.clip2} value={clip2Draft} onchange={event => clip2Draft = event.currentTarget.value} disabled={seamlessState.pendingInputs.includes('best_fit_clip')} /></label>
         <button class="button button-secondary" onclick={saveClip} disabled={seamlessState.pendingInputs.includes('best_fit_clip')}>Apply clip</button>
       </div>{/if}
       <div class="stage4-copy-controls">

@@ -248,7 +248,11 @@ export function validateStage5InteractionMatrix(
       }
       for (let row = first; row <= last; row += 1) {
         if (!hasValidEnergies(energetics, range, rows[row])) {
-          return `scoring error at ${rows[row]} / ${range}`;
+          const lockOwner = (anchorsByRange.get(range) ?? []).find(anchor =>
+            anchor.locks.some(lock => lock.fragment === rows[row]));
+          return lockOwner
+            ? `selected anchor ${lockOwner.resid} has a scoring error at ${rows[row]} / ${range}`
+            : `scoring error at ${rows[row]} / ${range}`;
         }
       }
       index += 1;
@@ -417,6 +421,20 @@ export function adaptInteractionMatrix(
   for (const [newIndex, key] of newRows.entries()) {
     const previous = oldIndex.get(key);
     if (previous !== undefined) grid[newIndex] = [...matrix.grid[previous]];
+  }
+  // Newly uncovered candidate rows are mandatory locks, even below the
+  // matrix's normal growth threshold.
+  for (const anchor of anchors as any[]) {
+    const column = (matrix.ranges as string[]).indexOf(anchor.range);
+    for (const lock of anchor.locks as Array<{ fragment: string }>) {
+      const row = positions.get(lock.fragment);
+      if (column < 0 || row === undefined) return null;
+      // Preserve the mandatory lock even when its score is bad. The matrix
+      // read validator reports the anchor-specific scoring error; dropping
+      // the adapted matrix here would make the caller replace it with an
+      // empty skeleton and lose addressed edits.
+      grid[row][column] = true;
+    }
   }
   if (mapped.length) {
     const first = mapped[0];

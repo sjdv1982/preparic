@@ -279,7 +279,38 @@ describe('W5 P5.3/P5.4 range columns, anchor locks, and Recompute', () => {
     expect(candidateAnchors(shared, selected, [stack], keys)![0].locks).toEqual([
       { fragment: keys[2], nucleotide: 2 }, { fragment: keys[3], nucleotide: 1 },
     ]);
+    expect(candidateAnchors(shared, selected, [stack], keys.slice(3))![0].locks).toEqual([
+      { fragment: keys[3], nucleotide: 1 },
+    ]);
+    expect(candidateAnchors(shared, selected, [stack], keys.slice(0, 3))![0].locks).toEqual([
+      { fragment: keys[2], nucleotide: 2 },
+    ]);
     expect(candidateAnchors(shared, selected, [stack], keys.slice(4))).toBeNull();
+  });
+  it('W8a restores an uncovered low-energy lock and retains the selected stacking and interior cap', () => {
+    const full = [anchorAt(4, 'range-2', [3, 4]), anchorAt(6, 'range-3')];
+    const clipped = [{ ...full[0], locks: [full[0].locks[1]] }, full[1]];
+    const energy = energetics();
+    energy.ranges.forEach((column: any) => column.rows.forEach((row: any) => {
+      row.reference = { energy: 0, error: null }; row.bestfit = { energy: 0, error: null };
+    }));
+    const old = { ...emptyFor(full), rows: keys.slice(3), grid: keys.slice(3).map(() => [false, false]) };
+    const value = recomputeInteractionMatrix(old, clipped, energy)!;
+    value.grid[1][1] = true;
+    const before = structuredClone(value);
+    const restored = adaptInteractionMatrix(value, keys, full, energy)!;
+    expect(restored.basis).toEqual(value.basis);
+    expect(restored.grid[2][0]).toBe(true);
+    expect(restored.grid.slice(3)).toEqual(value.grid);
+    expect(adaptInteractionMatrix(restored, value.rows, clipped, energy)).toEqual(value);
+    expect(value).toEqual(before);
+    energy.ranges[0].rows[2].bestfit = { energy: null, error: 'bad candidate' };
+    const restoredWithError = adaptInteractionMatrix(value, keys, full, energy)!;
+    expect(restoredWithError.grid[2][0]).toBe(true);
+    expect(restoredWithError.grid.slice(3)).toEqual(value.grid);
+    expect(validateStage5InteractionMatrix(restoredWithError, keys, full, energy, ranges)).toMatch(/107/);
+    expect(validateStage5InteractionMatrix(restored, keys, full, energy, ranges)).toMatch(/107/);
+    expect(validateStage5InteractionMatrix(value, value.rows, clipped, energy, ranges)).toBeNull();
   });
   it('M1 includes exact magnitude 1 and positive clash, excludes low/error stop rows and unreachable rows', () => {
     const items = [anchorAt(4)];
@@ -440,7 +471,7 @@ describe('W4/W5 integrated contract wiring', () => {
     const end = app.indexOf('async function backToStage4()', start);
     const transition = app.slice(start, end);
     expect(transition).toContain('canContinueStage4');
-    expect(transition).toContain('selectedCandidateFragments');
+    expect(transition).toContain('selectedCandidateGroups');
     expect(stage4).toContain('thresholdsCompleteForClip');
     expect(stage4).toContain('validClip(clip, fragmentCount)');
   });

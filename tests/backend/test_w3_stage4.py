@@ -7,7 +7,7 @@ import pytest
 
 from stage4 import (
     _candidate_fragments, _clamp_clip, _clip_fragments, _list_fragments,
-    _selected_candidate_numbers, _share_range_pdbs_aa, _valid_clip,
+    _selected_candidate_numbers, _selected_candidate_groups, _share_range_pdbs_aa, _valid_clip,
     _validate_threshold_edits,
 )
 
@@ -126,15 +126,27 @@ def test_t10_refuses_missing_duplicate_or_extra_fragment_rows():
             _validate_threshold_edits(marker, fragment_map())
 
 
-def test_clip_validation_and_entering_stage4_clamp_protect_every_candidate():
-    clip = {"schema": 1, "basis": copy.deepcopy(BASIS), "clip1": 2, "clip2": 2}
-    assert not _valid_clip(clip, 3, [2])
-    clamped = _clamp_clip(clip, 3, [2])
-    assert clamped == {**clip, "clip1": 1, "clip2": 1}
+def test_clip_validation_and_entering_stage4_clamp_keep_one_candidate_per_anchor():
+    clip = {"schema": 1, "basis": copy.deepcopy(BASIS), "clip1": 2, "clip2": 0}
+    assert not _valid_clip(clip, 3, [[1, 2]])
+    clamped = _clamp_clip(clip, 3, [[1, 2]])
+    assert clamped == {**clip, "clip1": 1}
     assert clip["clip1"] == 2
-    assert _valid_clip(clamped, 3, [2])
-    assert not _valid_clip({**clamped, "clip1": True}, 3, [2])
-    assert not _valid_clip({**clamped, "clip2": -1}, 3, [2])
+    assert _valid_clip(clamped, 3, [[1, 2]])
+    assert _clamp_clip(clamped, 3, [[1, 2]]) == clamped
+    assert _clamp_clip({**clip, "clip1": 0, "clip2": 2}, 3, [[2, 3]]) == {**clip, "clip1": 0, "clip2": 1}
+    assert not _valid_clip({**clamped, "clip1": True}, 3, [[1, 2]])
+    assert not _valid_clip({**clamped, "clip2": -1}, 3, [[1, 2]])
+    assert not _valid_clip({**clamped, "clip1": 0.5}, 3, [[1, 2]])
+    assert not _valid_clip({**clamped, "clip1": 2, "clip2": 1}, 3, [[1, 2]])
+    assert _clamp_clip({**clip, "clip1": 1, "clip2": 1}, 3, [[1], [3]]) == {**clip, "clip1": 0, "clip2": 0}
+
+
+def test_selected_candidate_groups_preserve_stacking_identity():
+    stackings = [{"rna_resname": "C", "rna_resid": 102, "protein_range_pdb_id": 2, "protein_resid": 30},
+                 {"rna_resname": "G", "rna_resid": 103, "protein_range_pdb_id": 2, "protein_resid": 31}]
+    selection = {"schema": 1, "basis": BASIS, "active": True, "selected": {json.dumps([row["rna_resname"], row["rna_resid"], 2, row["protein_resid"]], separators=(",", ":")): True for row in stackings}}
+    assert _selected_candidate_groups(fragment_map(), selection, stackings) == [[1, 2], [2, 3]]
 
 
 def test_t11_filters_edited_rows_and_keeps_pdb_bytes_and_actual_residues():

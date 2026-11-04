@@ -153,26 +153,65 @@ export function validateThresholdEdits(edits: unknown, inventory: unknown): bool
   return true;
 }
 
-function validClip(clip: unknown, fragmentCount: number): clip is ClipMarker {
-  return isRecord(clip) && clip.schema === 1
-    && Number.isSafeInteger(clip.clip1) && Number(clip.clip1) >= 0
-    && Number.isSafeInteger(clip.clip2) && Number(clip.clip2) >= 0
-    && Number(clip.clip1) + Number(clip.clip2) < fragmentCount;
+type CandidateGroupSet = readonly (readonly number[])[];
+type CandidateInput = readonly number[] | CandidateGroupSet;
+
+function asCandidateGroups(value: CandidateInput): number[][] | null {
+  if (!Array.isArray(value)) return null;
+  if (value.every(candidate => typeof candidate === 'number')) {
+    return value.map(candidate => [candidate as number]);
+  }
+  if (value.every(group => Array.isArray(group))) {
+    return value.map(group => [...group as readonly number[]]);
+  }
+  return null;
 }
 
-export function selectedCandidateFragments(
+function keepsEveryCandidateGroup(clip: ClipMarker, fragmentCount: number, value: CandidateInput): boolean {
+  const groups = asCandidateGroups(value);
+  if (groups === null) return false;
+  return groups.every(group => group.length > 0
+    && group.every(number => Number.isSafeInteger(number) && number >= 1 && number <= fragmentCount)
+    && group.some(number => number > clip.clip1 && number <= fragmentCount - clip.clip2));
+}
+
+function validClip(
+  clip: unknown,
+  fragmentCount: number,
+  candidates?: CandidateInput,
+): clip is ClipMarker {
+  if (!isRecord(clip) || clip.schema !== 1
+    || !Number.isSafeInteger(clip.clip1) || Number(clip.clip1) < 0
+    || !Number.isSafeInteger(clip.clip2) || Number(clip.clip2) < 0
+    || Number(clip.clip1) + Number(clip.clip2) >= fragmentCount) return false;
+  return candidates === undefined || keepsEveryCandidateGroup(clip as unknown as ClipMarker, fragmentCount, candidates);
+}
+
+/** Validate the stage-4 extent and require one kept candidate for every selected stacking. */
+export function validClipForCandidates(
+  clip: unknown,
+  fragmentCount: number,
+  candidates: CandidateInput,
+): clip is ClipMarker {
+  return validClip(clip, fragmentCount, candidates);
+}
+
+/** Return one candidate-fragment group per selected stacking key. */
+export function selectedCandidateGroups(
   inventory: unknown,
   selectedKeys: readonly string[],
   stackings: unknown,
-): number[] {
+): number[][] {
   if (!isRecord(inventory) || !Array.isArray(inventory.fragments)) return [];
   const rows = Array.isArray(stackings) ? stackings
     : isRecord(stackings) && Array.isArray(stackings.rows) ? stackings.rows : null;
   if (!rows) return [];
-  const selected = new Set(selectedKeys);
-  const fragments = new Set<number>();
+  const candidatesByKey = new Map(selectedKeys.map(key => [key, new Set<number>()]));
   for (const row of rows) {
-    if (!isRecord(row) || !selected.has(stackingKey(row as unknown as Stacking))) continue;
+    if (!isRecord(row)) continue;
+    const key = stackingKey(row as unknown as Stacking);
+    const candidates = candidatesByKey.get(key);
+    if (!candidates) continue;
     const resid = row.rna_resid;
     let base = typeof row.rna_resname === 'string' ? row.rna_resname.trim().toUpperCase() : '';
     if (base.length === 2 && (base[0] === 'R' || base[0] === 'D')) base = base[1];
@@ -182,11 +221,20 @@ export function selectedCandidateFragments(
       if (fragment.residues.some(identity => isRecord(identity)
         && identity.resid === resid && identity.base === base)
         && typeof fragment.number === 'number' && Number.isSafeInteger(fragment.number)) {
-        fragments.add(Number(fragment.number));
+        candidates.add(Number(fragment.number));
       }
     }
   }
-  return [...fragments].sort((left, right) => left - right);
+  return [...candidatesByKey.values()].map(group => [...group].sort((left, right) => left - right));
+}
+
+export function selectedCandidateFragments(
+  inventory: unknown,
+  selectedKeys: readonly string[],
+  stackings: unknown,
+): number[] {
+  return [...new Set(selectedCandidateGroups(inventory, selectedKeys, stackings).flat())]
+    .sort((left, right) => left - right);
 }
 
 /** Apply the sole automatic stage-3→4 correction: clamp a clip off anchors. */
@@ -197,13 +245,15 @@ export function clipForSelectedAnchors(
   stackings: unknown,
 ): ClipMarker {
   if (!isRecord(inventory) || !Array.isArray(inventory.fragments)) return clip;
-  const candidates = selectedCandidateFragments(inventory, selectedKeys, stackings);
-  if (candidates.length === 0) return clip;
+  const groups = selectedCandidateGroups(inventory, selectedKeys, stackings);
+  if (groups.length === 0 || groups.some(group => group.length === 0)) return clip;
   const count = inventory.fragments.length;
+  const clip1Limit = Math.min(...groups.map(group => Math.max(...group) - 1));
+  const clip2Limit = Math.min(...groups.map(group => count - Math.min(...group)));
   return {
     ...clip,
-    clip1: Math.min(clip.clip1, Math.min(...candidates) - 1),
-    clip2: Math.min(clip.clip2, count - Math.max(...candidates)),
+    clip1: Math.min(clip.clip1, clip1Limit),
+    clip2: Math.min(clip.clip2, clip2Limit),
   };
 }
 
@@ -233,17 +283,15 @@ export function canContinueStage4(options: {
   edits: unknown;
   fragmentCount: number;
   clip: unknown;
-  selectedCandidates: readonly number[];
+  selectedCandidates: CandidateInput;
   energeticsFresh: boolean;
   thresholdValidatorFailed: boolean;
 }): boolean {
   const { edits, fragmentCount, clip, selectedCandidates, energeticsFresh, thresholdValidatorFailed } = options;
-  if (!energeticsFresh || thresholdValidatorFailed || !validClip(clip, fragmentCount)
+  if (!energeticsFresh || thresholdValidatorFailed || !validClip(clip, fragmentCount, selectedCandidates)
     || !isRecord(edits) || edits.active !== true || !Array.isArray(edits.pairs) || !Array.isArray(edits.bases)) return false;
   const currentClip = clip as ClipMarker;
   if (isRecord(edits.basis) && currentClip.basis && !sameAddress(edits.basis.rna, currentClip.basis.rna)) return false;
-  if (selectedCandidates.some(number => !Number.isSafeInteger(number) || number <= currentClip.clip1
-    || number > fragmentCount - currentClip.clip2)) return false;
   const kept = new Set(Array.from({ length: fragmentCount - currentClip.clip1 - currentClip.clip2 },
     (_, index) => index + currentClip.clip1 + 1));
   for (const row of edits.bases) {

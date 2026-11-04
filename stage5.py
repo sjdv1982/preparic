@@ -491,6 +491,13 @@ def validate_interaction_matrix(
                 raise ValueError(f"S14 true run {rows[first]}–{rows[last]} in {range_id} has no selected anchor.")
             for fragment in rows[first:last + 1]:
                 if not _has_energy(energy_by_range.get(range_id, {}).get(fragment)):
+                    owner = next((anchor for anchor in anchors_by_range[range_id]
+                                  if any(lock.get("fragment") == fragment
+                                         for lock in anchor.get("locks", []))), None)
+                    if owner is not None:
+                        raise ValueError(
+                            f"Selected anchor {owner['resid']} / {range_id} has a scoring error at {fragment}."
+                        )
                     raise ValueError(f"S14 selects {fragment} in {range_id}, which has a scoring error.")
             index += 1
     return matrix
@@ -648,6 +655,17 @@ def adapt_interaction_matrix(
             continue
         for column in range(len(ranges)):
             grid[row_index][column] = old_grid[old_position[key]][column]
+
+    # Every kept candidate is a mandatory lock, including rows newly exposed
+    # by a clip change and candidates whose energy is below the growth cutoff.
+    for anchor in anchors:
+        column = ranges.index(anchor["range"])
+        for lock in anchor.get("locks", []):
+            row = new_position[lock["fragment"]]
+            # Keep the mandatory lock in the adapted state even when this
+            # newly uncovered candidate has a scoring error. The subsequent
+            # matrix read rejects it with the anchor-specific diagnostic.
+            grid[row][column] = True
 
     if old_positions:
         first_new, last_new = old_positions[0], old_positions[-1]

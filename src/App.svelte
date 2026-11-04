@@ -11,7 +11,7 @@
   import { findChain } from './lib/chains';
   import { cloneRangeRows, updateRow, validateRows } from './lib/ranges';
   import { mergeStackings, observeStage2RangeRows, resolveSelectedStackings } from './lib/stackings';
-  import { canContinueStage4, canEnterStage4, clipForSelectedAnchors, makeThresholdSkeleton, selectedCandidateFragments, validateThresholdEdits } from './lib/stage4';
+import { canContinueStage4, canEnterStage4, clipForSelectedAnchors, makeThresholdSkeleton, selectedCandidateGroups, validClipForCandidates, validateThresholdEdits } from './lib/stage4';
   import { adaptInteractionMatrix, candidateAnchors, makeInteractionMatrix, recomputeInteractionMatrix, reconcileEnergyThresholdEdits, stage5CanAdvance, stage5Rows, type Stage5S14 } from './lib/stage5';
   import { markerIsWellFormed } from './lib/project-state';
   import { classMarkerForContinue, selectedGaussianKeys } from './lib/stage6';
@@ -334,7 +334,7 @@
       && selection.selected && typeof selection.selected === 'object'
       ? selection.selected as Record<string, boolean> : {};
     const selectedKeys = Object.keys(selected).filter(key => selected[key] === true);
-    const candidateNumbers = selectedCandidateFragments(inventory, selectedKeys, stackings);
+    const candidateGroups = selectedCandidateGroups(inventory, selectedKeys, stackings);
     const basis = inventory.echo;
     const currentClip = seamlessState.projectSnapshot.best_fit_clip as any;
     const clipBasis = currentClip?.basis;
@@ -345,10 +345,7 @@
     let nextClip = basisMatches
       ? clipForSelectedAnchors(currentClip, inventory, selectedKeys, stackings)
       : { schema: 1 as const, basis, clip1: 0, clip2: 0 };
-    if (!Number.isSafeInteger(nextClip.clip1) || !Number.isSafeInteger(nextClip.clip2)
-      || nextClip.clip1 < 0 || nextClip.clip2 < 0
-      || nextClip.clip1 + nextClip.clip2 >= inventoryFragments.length
-      || candidateNumbers.some(number => number <= nextClip.clip1 || number > inventoryFragments.length - nextClip.clip2)) {
+    if (!validClipForCandidates(nextClip, inventoryFragments.length, candidateGroups)) {
       seamlessState.stackingSelectionError = 'The existing clip is invalid for this fragment list and selected anchors.';
       return;
     }
@@ -385,7 +382,7 @@
       && selection.selected && typeof selection.selected === 'object'
       ? Object.keys(selection.selected as Record<string, boolean>)
         .filter(key => (selection.selected as Record<string, boolean>)[key] === true) : [];
-    const selectedCandidates = selectedCandidateFragments(inventory, selectedKeys, stackings);
+    const selectedCandidates = selectedCandidateGroups(inventory, selectedKeys, stackings);
     const thresholdValidatorFailed = seamlessState.stateGraphErrors.some(issue =>
       issue.name === 'validate_threshold_edits' && issue.state === 'failed');
     if (!seamlessState.ready || seamlessState.status !== 'live' || seamlessState.projectStage !== 4

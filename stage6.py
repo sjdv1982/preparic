@@ -630,6 +630,10 @@ def gaussian_scores(
     candidates_out = []
     score_by_identity = {}
     for row in bestfit_rows:
+        if not isinstance(row, dict):
+            raise ValueError("T18 returned a malformed descriptor row.")
+        if type(row.get("fragment")) is int and not _is_kept(row["fragment"], bounds):
+            continue
         if not isinstance(row.get("key"), str) or type(row.get("fragment")) is not int \
             or row.get("nucleotide") not in {"first", "second"}:
             if row.get("error"):

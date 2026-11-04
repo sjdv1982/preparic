@@ -198,6 +198,10 @@ def test_m2_candidate_collapse_keeps_original_stacking_keys_and_mapped_nucleotid
     assert empty["ranges"] == RANGES
     assert empty["basis"] == sorted(selected["selected"])
     assert selected == selected_before  # Original Gaussian job identities survive.
+    assert candidate_anchors(frags, selected, stacks, KEYS[3:])[0]["locks"] == [
+        {"fragment": KEYS[3], "nucleotide": 1}]
+    assert candidate_anchors(frags, selected, stacks, KEYS[:3])[0]["locks"] == [
+        {"fragment": KEYS[2], "nucleotide": 2}]
     with pytest.raises(ValueError, match="clipped|unmapped"):
         candidate_anchors(frags, selected, stacks, KEYS[4:])
 
@@ -445,3 +449,43 @@ def test_e3_t27_unknown_fragment_fails_but_stale_basis_and_ranges_defer():
     assert validate_energy_threshold_edits(stale, frags, SPECS) is None
     edits["ranges"][0]["row"] = {"chain": "gone", "start": 1, "end": 2}
     assert validate_energy_threshold_edits(edits, frags, SPECS) is None
+
+
+def test_w8a_matrix_reuse_restores_uncovered_lock_despite_low_energy_and_preserves_caps():
+    frags = fragments()
+    frags["fragments"][2]["residues"][1]["resid"] = 107
+    selected, stacks = selection_and_stackings((107, 2, 8), (111, 3, 9))
+    clipped_rows = KEYS[3:]
+    old_anchors = candidate_anchors(frags, selected, stacks, clipped_rows)
+    new_anchors = candidate_anchors(frags, selected, stacks, KEYS)
+    energy = energies()
+    for column in energy["ranges"]:
+        for row in column["rows"]:
+            row.update(reference={"energy": 0, "error": None}, bestfit={"energy": 0, "error": None})
+    old = make_interaction_matrix(frags, {"clip1": 3, "clip2": 0}, SPECS, selected, stacks)
+    old = recompute_interaction_matrix(old, old_anchors, energy)
+    old["grid"][1][1] = True  # a user cap beside the interior range-3 lock
+    before = deepcopy(old)
+    restored = adapt_interaction_matrix(old, KEYS, new_anchors, energy)
+    assert restored["basis"] == old["basis"] == sorted(selected["selected"])
+    assert restored["grid"][2][0] is True  # restored candidate lock ignores low energy
+    assert restored["grid"][3:] == old["grid"]
+    assert adapt_interaction_matrix(restored, clipped_rows, old_anchors, energy) == old
+    validate_interaction_matrix(restored, KEYS, RANGES, new_anchors, energy)
+    assert old == before
+    handoff = interaction_handoff(old, frags, selected, stacks, {"clip1": 3, "clip2": 0}, SPECS)
+    assert {(item["fragment"], item["nucleotide"]) for run in handoff["runs"] for item in run["anchors"]} == {
+        (KEYS[3], 1), (KEYS[5], 1)}
+    uncovered_handoff = interaction_handoff(restored, frags, selected, stacks, {"clip1": 0, "clip2": 0}, SPECS)
+    assert {(item["fragment"], item["nucleotide"]) for run in uncovered_handoff["runs"] for item in run["anchors"]} == {
+        (KEYS[2], 2), (KEYS[3], 1), (KEYS[5], 1)}
+    energy["ranges"][0]["rows"][2]["bestfit"] = {"energy": None, "error": "bad candidate"}
+    restored_with_error = adapt_interaction_matrix(old, KEYS, new_anchors, energy)
+    assert restored_with_error["grid"][2][0] is True
+    assert restored_with_error["grid"][3:] == old["grid"]
+    with pytest.raises(ValueError, match="107"):
+        validate_interaction_matrix(restored_with_error, KEYS, RANGES, new_anchors, energy)
+    with pytest.raises(ValueError, match="107"):
+        validate_interaction_matrix(restored, KEYS, RANGES, new_anchors, energy)
+    # Explicit clipping removes only the failing candidate, retaining its stacking.
+    validate_interaction_matrix(old, clipped_rows, RANGES, old_anchors, energy)

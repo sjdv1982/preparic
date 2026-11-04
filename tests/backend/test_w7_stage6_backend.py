@@ -496,3 +496,55 @@ def test_b16_browser_receives_no_gaussian_model_or_density_kernel():
     for forbidden in ("normalizer", "precision:", "covariance:", "Math.exp(-0.5", "gaussian_stacking_filter.json"):
         assert forbidden not in source
 
+
+
+@pytest.mark.parametrize("anchor_resid,clip_values,kept_fragment,clipped_fragment", [
+    (2, (1, 0), 2, 1), (3, (0, 1), 2, 3),
+])
+def test_w8a_kept_candidate_alone_controls_jobs_classes_and_both_validation_panels(
+    anchor_resid, clip_values, kept_fragment, clipped_fragment,
+):
+    clip = {"schema": 1, "basis": None, "clip1": clip_values[0], "clip2": clip_values[1]}
+    case = tiny_case(fragment_count=3, anchor_resid=anchor_resid, clip=clip,
+                     descriptors={clipped_fragment: (4.9, 59.9, 80.0)})
+    fragments, stackings, selection, _, fits, _ = case
+    key = anchor_key(anchor_resid)
+    marker = class_marker(key, 90, tilt30=False, disp45=True)
+    marker_before = copy.deepcopy(marker)
+    scores = gaussian_output(case)
+    assert len(scores["classes"]) == 1
+    assert scores["classes"][0]["candidate_count"] == 1
+    assert scores["classes"][0]["auto_prefilters"] == {"tilt30": True, "disp45": True}
+    assert [row["fragment"] for row in scores["candidate_scores"]] == [kept_fragment]
+    jobs = stage6.gaussian_check_jobs(fits, fragments, stackings, selection, clip)
+    assert not jobs["errors"]
+    assert [job["fragment"] for job in jobs["jobs"]] == [kept_fragment]
+
+    def check_result(jobs):
+        return {"schema": 1, "filter_set_version": SPEC["filter_set_version"], "min_cell_fraction": 1 / 3,
+                "jobs": [{"key": job["key"], "fragment": job["fragment"], "nucleotide": job["nucleotide"],
+                          "filters": {"rrm90-disp45": {"fill": 1 / 3, "emitted": True,
+                              "pose_pass": job["fragment"] != clipped_fragment, "score": 0.3}}}
+                         for job in jobs["jobs"]]}
+
+    merged = stage6.merge_gaussian_validation(check_result(jobs), jobs, marker, selection, clip, fits, MODEL_JSON, gaussian_filter)
+    assert merged["rows"][0]["worst_state"] == "green"
+    assert len(merged["rows"][0]["candidates"]) == 1
+    assert marker == marker_before  # changed aggregation never overwrites edited classes
+    edits = {"schema": 1, "active": True, "bases": [
+        {"fragment": n, "sequence": "AA", "nuc1_ovrmsd": "0.50" if n == clipped_fragment else "1.10",
+         "nuc2_ovrmsd": "0.50" if n == clipped_fragment else "1.10"} for n in range(1, 4)]}
+    computed = {"schema": 1, "bases": [
+        {"fragment": n, "sequence": "AA", "nuc1_ovrmsd": "1.01", "nuc2_ovrmsd": "1.01",
+         "nuc1_ovrmsd_raw": 1.0, "nuc2_ovrmsd_raw": 1.0} for n in range(1, 4)]}
+    reference = stage6.validate_refe_anchors(edits, computed, fragments, stackings, selection, clip, fits)
+    assert [(row["fragment"], row["status"]) for row in reference["rows"]] == [(kept_fragment, "green")]
+    unclip = {**clip, "clip1": 0, "clip2": 0}
+    uncovered_jobs = stage6.gaussian_check_jobs(fits, fragments, stackings, selection, unclip)
+    assert len(uncovered_jobs["jobs"]) == 2
+    uncovered = stage6.merge_gaussian_validation(check_result(uncovered_jobs), uncovered_jobs, marker,
+        selection, unclip, fits, MODEL_JSON, gaussian_filter)
+    assert uncovered["rows"][0]["worst_state"] != "green"
+    reference = stage6.validate_refe_anchors(edits, computed, fragments, stackings, selection, unclip, fits)
+    assert {row["status"] for row in reference["rows"]} == {"green", "red"}
+    assert marker == marker_before

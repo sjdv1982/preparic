@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   canContinueStage4, canEnterStage4, clipForSelectedAnchors, copyComputedThresholds,
-  defaultStackingSelection, makeThresholdSkeleton, selectedCandidateFragments, thresholdsCompleteForClip,
+  defaultStackingSelection, makeThresholdSkeleton, selectedCandidateFragments, selectedCandidateGroups, thresholdsCompleteForClip,
   validateThresholdEdits, validateThresholdValue,
 } from '../../src/lib/stage4';
 import { stackingKey } from '../../src/lib/stackings';
@@ -164,14 +164,36 @@ describe('W3 stage 4 decisions (OC P4.3, D4/D5)', () => {
     expect(table).toEqual(before);
   });
 
-  it('clamps every candidate of a newly selected anchor before entering stage 4', () => {
-    const old = { ...clip, clip1: 2, clip2: 2 };
+  it('retains one candidate at either end and minimally restores an excluded anchor', () => {
     const row = stacking(102);
     const key = stackingKey(row);
     expect(selectedCandidateFragments(fragments, [key], [row])).toEqual([1, 2]);
-    expect(clipForSelectedAnchors(old, fragments, [key], [row])).toEqual({ ...old, clip1: 0, clip2: 1 });
+    expect(selectedCandidateGroups(fragments, [key], [row])).toEqual([[1, 2]]);
+    for (const saved of [{ ...clip, clip1: 1 }, { ...clip, clip2: 2 }]) {
+      expect(clipForSelectedAnchors(saved, fragments, [key], [row])).toEqual(saved);
+    }
+    const old = { ...clip, clip1: 2 };
+    expect(clipForSelectedAnchors(old, fragments, [key], [row])).toEqual({ ...old, clip1: 1 });
     expect(old.clip1).toBe(2);
+    const right = { ...stacking(103), rna_resname: 'G' };
+    expect(selectedCandidateGroups(fragments, [stackingKey(right)], [right])).toEqual([[2, 3]]);
+    expect(clipForSelectedAnchors({ ...clip, clip2: 1 }, fragments, [stackingKey(right)], [right]))
+      .toEqual({ ...clip, clip2: 1 });
+    expect(clipForSelectedAnchors({ ...clip, clip2: 2 }, fragments, [stackingKey(right)], [right]))
+      .toEqual({ ...clip, clip2: 1 });
   });
+
+  it('protects terminal singleton candidates and simultaneous selected anchors', () => {
+    const rows = [{ ...stacking(101), rna_resname: 'A' }, { ...stacking(104), rna_resname: 'U' }];
+    expect(selectedCandidateGroups(fragments, rows.map(stackingKey), rows)).toEqual([[1], [3]]);
+    expect(clipForSelectedAnchors({ ...clip, clip1: 1, clip2: 1 }, fragments,
+      [stackingKey(rows[0])], [rows[0]])).toEqual({ ...clip, clip2: 1 });
+    expect(clipForSelectedAnchors({ ...clip, clip1: 1, clip2: 1 }, fragments,
+      [stackingKey(rows[1])], [rows[1]])).toEqual({ ...clip, clip1: 1 });
+    expect(clipForSelectedAnchors({ ...clip, clip1: 1, clip2: 1 }, fragments,
+      rows.map(stackingKey), rows)).toEqual(clip);
+  });
+
 });
 
 describe('W3 forward gates use current data without waiting for the fit', () => {
@@ -194,10 +216,11 @@ describe('W3 forward gates use current data without waiting for the fit', () => 
   });
 
   it('test_continue_4_to_5_accepts_complete_typed_thresholds_while_copy_source_stale', () => {
-    const args = { edits: filled(), fragmentCount: 3, clip, selectedCandidates: [2], energeticsFresh: true, thresholdValidatorFailed: false };
+    const args = { edits: filled(), fragmentCount: 3, clip, selectedCandidates: [[1, 2]], energeticsFresh: true, thresholdValidatorFailed: false };
     expect(canContinueStage4(args)).toBe(true);
     expect(canContinueStage4({ ...args, energeticsFresh: false })).toBe(false);
     expect(canContinueStage4({ ...args, thresholdValidatorFailed: true })).toBe(false);
+    expect(canContinueStage4({ ...args, clip: { ...clip, clip1: 1 } })).toBe(true);
     expect(canContinueStage4({ ...args, clip: { ...clip, clip1: 2 } })).toBe(false);
     expect(canContinueStage4({ ...args, edits: makeThresholdSkeleton(fragments, '1B7F') })).toBe(false);
   });

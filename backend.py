@@ -534,7 +534,7 @@ def _stage4_clip_fragments(
     import preparic_stage4
     if selection is None or (type(selection) is dict and selection.get("active") is False):
         return {}
-    candidates = preparic_stage4._selected_candidate_numbers(fragments, selection, stackings)
+    candidates = preparic_stage4._selected_candidate_groups(fragments, selection, stackings)
     return preparic_stage4._clip_fragments(
         best_fits, refe_fragments, thresholds, clip, fragments, candidates
     )
