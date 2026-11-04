@@ -62,7 +62,7 @@ _RANGE_KEYS = {"chain", "start", "end"}
 _MARKER_KEYS = {
     "ranges": {"schema", "basis", "active", "rows"},
     "stacking_selection": {"schema", "basis", "active", "selected"},
-    "threshold_edits": {"schema", "basis", "active", "pairs", "bases"},
+    "threshold_edits": {"schema", "basis", "active", "pairs"},
     "best_fit_clip": {"schema", "basis", "clip1", "clip2"},
     "interaction_matrix": {"schema", "basis", "active", "rows", "ranges", "grid"},
     "gaussian_classes": {"schema", "basis", "active", "rows"},
@@ -118,7 +118,7 @@ def _valid_decision(name: str, value: object) -> bool:
             and all(type(flag) is bool for flag in selected.values())
     if name == "threshold_edits":
         if not _valid_rna_basis(value["basis"]) or type(value["active"]) is not bool \
-            or type(value["pairs"]) is not list or type(value["bases"]) is not list:
+            or type(value["pairs"]) is not list:
             return False
         pair_ids = []
         for row in value["pairs"]:
@@ -134,18 +134,7 @@ def _valid_decision(name: str, value: object) -> bool:
             pair_ids.append((row["down"], row["up"]))
         if not _unique(pair_ids):
             return False
-        base_ids = []
-        for row in value["bases"]:
-            if not _exact_keys(row, {"fragment", "sequence", "nuc1_ovrmsd", "nuc2_ovrmsd"}) \
-                or type(row["fragment"]) is not int or row["fragment"] < 1 \
-                or not isinstance(row["sequence"], str) or re.fullmatch(r"[ACGU]{2}", row["sequence"]) is None:
-                return False
-            for key in ("nuc1_ovrmsd", "nuc2_ovrmsd"):
-                if row[key] is not None and (not isinstance(row[key], str)
-                    or re.fullmatch(r"(?:[1-9][0-9]*(?:\.[0-9]{1,2})?|0\.(?:[1-9][0-9]?|0[1-9]))", row[key]) is None):
-                    return False
-            base_ids.append(row["fragment"])
-        return _unique(base_ids)
+        return True
     if name == "best_fit_clip":
         if type(value["clip1"]) is not int or value["clip1"] < 0 or type(value["clip2"]) is not int or value["clip2"] < 0:
             return False
@@ -258,6 +247,8 @@ def load_marker_payload(path: Path, marker_name: str, fallback: object = _NO_FAL
         schema = value.get("schema") if isinstance(value, dict) else None
         if schema is not None and schema != 1:
             reason = f"unsupported schema {schema!r}"
+        elif marker_name == "threshold_edits" and isinstance(value, dict) and "bases" in value:
+            reason = "stored threshold decision contains the legacy bases key"
         elif value is not None and isinstance(value, dict) and "basis" not in value:
             reason = "stored decision has no basis, so its upstream project cannot be established"
         else:
@@ -687,16 +678,6 @@ def _stage6_merge_gaussian_validation(
     return preparic_stage6.merge_gaussian_validation(
         check_result, jobs_result, class_marker, selection, clip, best_fits,
         model_json, alaric_gaussian_filter,
-    )
-
-
-def _stage6_validate_refe_anchors(
-    threshold_edits: object, best_fit_thresholds: object, fragments: object,
-    stackings: object, selection: object, clip: object, best_fits: object,
-) -> dict | None:
-    import preparic_stage6
-    return preparic_stage6.validate_refe_anchors(
-        threshold_edits, best_fit_thresholds, fragments, stackings, selection, clip, best_fits,
     )
 
 
@@ -1196,20 +1177,6 @@ def build_context() -> Context:
         context.merge_gaussian_validation.celltypes.result = "plain"
         context.gaussian_validation = context.merge_gaussian_validation.result
 
-        context.validate_refe_anchors = _stage6_validate_refe_anchors
-        context.validate_refe_anchors.modules.preparic_stage6 = stage6_module
-        context.validate_refe_anchors.pins.threshold_edits = context.threshold_edits
-        context.validate_refe_anchors.pins.best_fit_thresholds = context.best_fit_thresholds
-        context.validate_refe_anchors.pins.fragments = context.fragments
-        context.validate_refe_anchors.pins.stackings = context.stackings
-        context.validate_refe_anchors.pins.selection = context.stacking_selection
-        context.validate_refe_anchors.pins.clip = context.best_fit_clip
-        context.validate_refe_anchors.pins.best_fits = context.best_fits
-        for pin in ("threshold_edits", "best_fit_thresholds", "fragments", "stackings", "selection", "clip", "best_fits"):
-            context.validate_refe_anchors.celltypes[pin] = "plain"
-        context.validate_refe_anchors.celltypes.result = "plain"
-        context.refe_validation = context.validate_refe_anchors.result
-
         context.pdbcode.share(readonly=False)
         context.biounit.share(readonly=False)
         context.cif.share(path="cif.cif", readonly=False)
@@ -1244,10 +1211,6 @@ def build_context() -> Context:
             MOUNT_DIRECTORY / "gaussian-validation.json", mode="w", authority="cell"
         )
         context.gaussian_validation.share()
-        context.refe_validation.mount(
-            MOUNT_DIRECTORY / "refe-validation.json", mode="w", authority="cell"
-        )
-        context.refe_validation.share()
         context.gaussian_scores.share()
         context.structure_id_result.share(path="structure_id")
         context.mounts.sync(timeout=60)

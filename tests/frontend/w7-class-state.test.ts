@@ -49,15 +49,15 @@ test('W7 requires unique class keys and the exact selected basis', () => {
   expect(markerIsWellFormed('gaussian_classes', wrong)).toBe(false);
 });
 
-test('W7 old validation cannot match optimistic class or bases changes', () => {
-  const oldEcho = { rows: classes().rows, bases: [{ fragment: 1, nuc1_ovrmsd: '1.20' }], clip: [0, 0] };
+test('W7 old validation cannot match optimistic class or clip changes', () => {
+  const oldEcho = { rows: classes().rows, clip: [0, 0] };
   expect(echoIsFresh(structuredClone(oldEcho), oldEcho)).toBe(true);
   const classEdit = structuredClone(oldEcho);
   classEdit.rows[0].disp45 = true;
   expect(echoIsFresh(oldEcho, classEdit)).toBe(false);
-  const basesEdit = structuredClone(oldEcho);
-  basesEdit.bases[0].nuc1_ovrmsd = '1.74';
-  expect(echoIsFresh(oldEcho, basesEdit)).toBe(false);
+  const clipEdit = structuredClone(oldEcho);
+  clipEdit.clip[0] = 1;
+  expect(echoIsFresh(oldEcho, clipEdit)).toBe(false);
   expect(echoIsFresh(null, classEdit)).toBe(false);
 });
 

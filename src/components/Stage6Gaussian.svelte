@@ -18,7 +18,6 @@
     gaussianReferenceRows,
     gaussianRrmOptions,
     reconcileGaussianClassDraft,
-    referenceAnchorState,
     revertGaussianClassRow,
     selectedGaussianKeys,
     setGaussianFlag,
@@ -55,14 +54,10 @@
 
   let scores = $derived(seamlessState.computed.gaussian_scores);
   let validation = $derived(seamlessState.computed.gaussian_validation);
-  let referenceValidation = $derived(seamlessState.computed.refe_validation);
-  let referenceLimit = $derived(isRecord(referenceValidation) && typeof referenceValidation.limit === 'number'
-    ? referenceValidation.limit : Number.NaN);
   let selected = $derived(selectedGaussianKeys(seamlessState.projectSnapshot.stacking_selection));
   let computedFresh = $derived(seamlessState.computedFreshness.gaussian_scores === true);
   let geometryFresh = $derived(seamlessState.computedFreshness.bestfit_stackings === true);
   let validationFresh = $derived(seamlessState.computedFreshness.gaussian_validation === true);
-  let referenceFresh = $derived(seamlessState.computedFreshness.refe_validation === true);
   let filterNames = $derived(isRecord(scores) && Array.isArray(scores.filter_names)
     ? scores.filter_names.filter((name: unknown): name is string => typeof name === 'string') : []);
   let rrmOptions = $derived(gaussianRrmOptions(filterNames));
@@ -255,10 +250,7 @@
 
   let gaussianErrors = $derived(errorFor('detect_stacking_bestfit', 'gaussian_scores_transformer',
     'validate_gaussian_classes', 'gaussian_check_transformer', 'gaussian_check', 'merge_gaussian_validation'));
-  let referenceErrors = $derived(errorFor('validate_refe_anchors'));
   let bestfitStackings = $derived(seamlessState.computed.bestfit_stackings);
-  let referenceStatus = $derived(referenceFresh && isRecord(referenceValidation) && Array.isArray(referenceValidation.rows)
-    ? referenceValidation.rows : []);
   let gaussianValidationRows = $derived(validationFresh && isRecord(validation) && Array.isArray(validation.rows)
     ? validation.rows : []);
 </script>
@@ -360,30 +352,6 @@
             </ul>
           </article>
         {/each}
-      </div>
-    {/if}
-  </section>
-
-  <section class="stage6-section" aria-label="Reference anchor validation">
-    <div class="stage6-heading"><div><h2>Reference-anchor validation</h2><p>Uses the editable stage-4 base thresholds and the A4 raw values.</p></div></div>
-    {#if referenceErrors}<p class="stage6-error" role="alert">{referenceErrors}</p>{/if}
-    {#if !referenceFresh}
-      <p class="stage6-pending" role="status">validating…</p>
-    {:else}
-      <div class="stage6-table-wrap">
-        <table class="stage6-table" aria-label="Reference anchor thresholds and validation status">
-          <thead><tr><th>Anchor</th><th>Candidate</th><th>Computed threshold</th><th>Raw</th><th>Editable S11 value</th><th>Status</th></tr></thead>
-          <tbody>
-            {#each referenceStatus as row, index (`${row.key}:${row.fragment}:${row.nucleotide}:${index}`)}
-              {@const status = referenceAnchorState(row)}
-              <tr class={`stage6-state-${status}`}>
-                <td><code>{row.key}</code></td><td>{row.fragment_key} · {row.nucleotide}</td>
-                <td>{row.computed ?? '—'}</td><td>{row.raw ?? '—'}</td><td>{row.threshold ?? 'empty'}</td>
-                <td>{status === 'blocked' ? `blocked · threshold exceeds ${referenceLimit.toFixed(3)} Å` : status}</td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
       </div>
     {/if}
   </section>

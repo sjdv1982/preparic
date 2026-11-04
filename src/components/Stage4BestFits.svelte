@@ -73,6 +73,7 @@
     fragmentCount,
     clip,
     selectedCandidates: candidateGroups,
+    thresholdsFresh: computedFresh,
     energeticsFresh,
     thresholdValidatorFailed: validatorFailed,
   }) && !!inventory && validateThresholdEdits(edits, inventory)
@@ -90,13 +91,6 @@
         if (row.crmsd !== source.crmsd) count += 1;
       }
     }
-    for (const row of edits.bases) {
-      const source = computedThresholds.bases?.find((item: any) => item.fragment === row.fragment);
-      if (source) {
-        if (row.nuc1_ovrmsd !== source.nuc1_ovrmsd) count += 1;
-        if (row.nuc2_ovrmsd !== source.nuc2_ovrmsd) count += 1;
-      }
-    }
     return count;
   });
 
@@ -106,10 +100,6 @@
 
   function computedValue(row: Record<string, any>, key: string): string | null {
     if (!computedFresh || !computedThresholds) return null;
-    if ('fragment' in row) {
-      const source = computedThresholds.bases?.find((item: any) => item.fragment === row.fragment);
-      return typeof source?.[key] === 'string' ? source[key] : null;
-    }
     const source = computedThresholds.pairs?.find((item: any) => item.down === row.down && item.up === row.up);
     return typeof source?.[key] === 'string' ? source[key] : null;
   }
@@ -128,7 +118,7 @@
     return true;
   }
 
-  function editValue(group: 'pairs' | 'bases', index: number, key: string, value: string): void {
+  function editValue(group: 'pairs', index: number, key: string, value: string): void {
     if (!edits) return;
     const normalized = value.trim();
     const nextValue = normalized === '' ? null : normalized;
@@ -148,7 +138,7 @@
       : '';
   }
 
-  function revertCell(group: 'pairs' | 'bases', index: number, key: string): void {
+  function revertCell(group: 'pairs', index: number, key: string): void {
     if (!edits || !computedFresh) return;
     const source = computedValue(edits[group][index] as Record<string, any>, key);
     if (source === null) return;
@@ -159,8 +149,7 @@
 
   function copyAll(): void {
     if (!edits || !computedFresh || !computedThresholds) return;
-    const hasUserValues = [...edits.pairs.flatMap(row => [row.ovrmsd, row.crmsd]),
-      ...edits.bases.flatMap(row => [row.nuc1_ovrmsd, row.nuc2_ovrmsd])].some(value => value !== null);
+    const hasUserValues = edits.pairs.flatMap(row => [row.ovrmsd, row.crmsd]).some(value => value !== null);
     if (hasUserValues && !window.confirm('Replace the current threshold edits with the computed values?')) return;
     const copied = copyComputedThresholds(edits, computedThresholds, true);
     save(copied);
@@ -250,27 +239,17 @@
     {/if}
 
     <div class="stage4-table-wrap">
-      <table class="stage4-table" aria-label="Editable fragment and pair RMSD thresholds">
+      <table class="stage4-table" aria-label="Reference fragment information and editable pair RMSD thresholds">
         <thead><tr><th>Fragment or pair</th><th>Sequence</th><th>Residues / pose</th><th>Fit RMSD</th><th>Computed limits</th><th>First limit</th><th>Second limit</th></tr></thead>
         <tbody>
-          {#each edits.bases as row, index (`base-${row.fragment}`)}
-            {@const comp1 = computedValue(row, 'nuc1_ovrmsd')}
-            {@const comp2 = computedValue(row, 'nuc2_ovrmsd')}
-            {@const fragmentInfo = inventory.fragments.find(item => item.number === row.fragment)}
+          {#each inventory.fragments as fragment (`fragment-${fragment.number}`)}
+            {@const fragmentInfo = fragment}
             {@const fitInfo = seamlessState.computedFreshness.best_fits === true ? bestFits?.rows?.find((item: any) => item.key === fragmentInfo?.key) : null}
             {@const residueText = fragmentInfo?.residues?.map(item => `${item.chain}:${item.resid}${item.insertion_code}`).join(' / ') ?? '—'}
-            <tr class:clipped={!isKept(row.fragment)} onmouseenter={() => appState.stage4OverlayFragments = [row.fragment]} onmouseleave={() => appState.stage4OverlayFragments = []}>
-              <th scope="row">frag-{row.fragment}</th><td>{row.sequence}</td><td>{residueText}{fitInfo ? ` · conformer ${fitInfo.conformer}` : ''}</td>
+            <tr class:clipped={!isKept(fragment.number)} onmouseenter={() => appState.stage4OverlayFragments = [fragment.number]} onmouseleave={() => appState.stage4OverlayFragments = []}>
+              <th scope="row">frag-{fragment.number}</th><td>{fragment.sequence}</td><td>{residueText}{fitInfo ? ` · conformer ${fitInfo.conformer}` : ''}</td>
               <td>{fitInfo && Array.isArray(fitInfo.grid) ? Number(fitInfo.rmsd ?? NaN).toFixed(2) + ' Å' : '—'}</td>
-              <td>{comp1 ?? '—'} / {comp2 ?? '—'}</td>
-              <td><input aria-label={`Fragment ${row.fragment} nucleotide 1 ovRMSD`} value={row.nuc1_ovrmsd ?? ''} oninput={event => explainInvalidDraft(event.currentTarget.value)} onchange={event => editValue('bases', index, 'nuc1_ovrmsd', event.currentTarget.value)} />
-                {#if row.nuc1_ovrmsd !== comp1 && comp1 !== null}<span class="stage4-diff" title="Differs from computed">●</span>{/if}
-                {#if isWarning(row.nuc1_ovrmsd)}<small class="stage4-warning">Above 10 Å</small>{/if}
-                <button class="stage4-revert" aria-label={`Revert fragment ${row.fragment} nucleotide 1 to computed`} disabled={!computedFresh || row.nuc1_ovrmsd === comp1} onclick={() => revertCell('bases', index, 'nuc1_ovrmsd')}>↶</button></td>
-              <td><input aria-label={`Fragment ${row.fragment} nucleotide 2 ovRMSD`} value={row.nuc2_ovrmsd ?? ''} oninput={event => explainInvalidDraft(event.currentTarget.value)} onchange={event => editValue('bases', index, 'nuc2_ovrmsd', event.currentTarget.value)} />
-                {#if row.nuc2_ovrmsd !== comp2 && comp2 !== null}<span class="stage4-diff" title="Differs from computed">●</span>{/if}
-                {#if isWarning(row.nuc2_ovrmsd)}<small class="stage4-warning">Above 10 Å</small>{/if}
-                <button class="stage4-revert" aria-label={`Revert fragment ${row.fragment} nucleotide 2 to computed`} disabled={!computedFresh || row.nuc2_ovrmsd === comp2} onclick={() => revertCell('bases', index, 'nuc2_ovrmsd')}>↶</button></td>
+              <td colspan="3">Anchor-refe thresholds are computed for export.</td>
             </tr>
           {/each}
           {#each edits.pairs as row, index (`pair-${row.down}-${row.up}`)}
@@ -294,7 +273,7 @@
     </div>
     {#if message}<p class="stage4-error" role="alert">{message}</p>{/if}
     {#if validatorFailed}<p class="stage4-error" role="alert">Threshold validation failed. Correct the table before continuing.</p>{/if}
-    <p class="stage4-gate" aria-live="polite">{complete ? 'Kept fragment thresholds are complete.' : 'Fill every threshold for kept fragments and pairs before continuing.'}</p>
+    <p class="stage4-gate" aria-live="polite">{complete ? 'Kept pair thresholds are complete.' : 'Fill both RMSD thresholds for every kept pair before continuing.'}</p>
   {/if}
 
   {#if !embedded}<div class="stage-footer stage-footer-split">

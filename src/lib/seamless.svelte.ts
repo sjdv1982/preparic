@@ -21,7 +21,7 @@ type ShareKey = 'pdbcode' | 'biounit' | 'ranges' | 'range_specs' | 'stackings' |
   | 'threshold_edits' | 'best_fit_clip' | 'interaction_matrix' | 'gaussian_classes' | 'energy_threshold_edits'
   | 'structure_id' | 'range_pdbs_aa' | 'fragments' | 'best_fit_thresholds' | 'best_fits' | 'energetics'
   | 'reference_fragment_pdbs'
-  | 'energy_thresholds' | 'interactions' | 'bestfit_stackings' | 'gaussian_validation' | 'refe_validation'
+  | 'energy_thresholds' | 'interactions' | 'bestfit_stackings' | 'gaussian_validation'
   | 'gaussian_scores';
 
 export interface SharedCell {
@@ -74,7 +74,6 @@ export interface ShareContext {
   interactions?: SharedCell;
   bestfit_stackings?: SharedCell;
   gaussian_validation?: SharedCell;
-  refe_validation?: SharedCell;
   gaussian_scores?: SharedCell;
   'cif.cif'?: SharedCell;
 }
@@ -209,7 +208,7 @@ const computedShareKeys: readonly ShareKey[] = [
   'range_specs', 'structure_id', 'range_pdbs_aa', 'stackings', 'fragments',
   'reference_fragment_pdbs', 'best_fit_thresholds', 'best_fits', 'energetics',
   'energy_thresholds', 'interactions', 'bestfit_stackings', 'gaussian_validation',
-  'refe_validation', 'gaussian_scores',
+  'gaussian_scores',
 ];
 let websocketPoll: ReturnType<typeof setInterval> | undefined;
 let hasConnectedBefore = false;
@@ -730,11 +729,6 @@ function currentComputedEcho(key: ShareKey): unknown | null {
         ? { classes: (snapshot.gaussian_classes as { rows?: unknown }).rows, clip: snapshot.best_fit_clip,
             selected_keys: selectionKeys(), best_fits: bestFitsEcho }
         : null;
-    case 'refe_validation':
-      return snapshot.threshold_edits && snapshot.best_fit_clip
-        ? { bases: (snapshot.threshold_edits as { bases?: unknown }).bases, clip: snapshot.best_fit_clip,
-            selected_keys: selectionKeys(), best_fits: bestFitsEcho }
-        : null;
     default: return null;
   }
 }
@@ -742,7 +736,7 @@ function currentComputedEcho(key: ShareKey): unknown | null {
 function refreshComputedFreshness(): void {
   const keys: ShareKey[] = [
     'stackings', 'fragments', 'reference_fragment_pdbs', 'best_fit_thresholds', 'best_fits', 'energetics', 'energy_thresholds',
-    'bestfit_stackings', 'gaussian_scores', 'gaussian_validation', 'refe_validation', 'range_pdbs_aa',
+    'bestfit_stackings', 'gaussian_scores', 'gaussian_validation', 'range_pdbs_aa',
   ];
   const freshness: Partial<Record<ShareKey, boolean>> = {};
   freshness.structure_id = seamlessState.ready && received.has('structure_id')
@@ -759,9 +753,6 @@ function refreshComputedFreshness(): void {
     && !pending.has('best_fit_clip') && !pending.has('stacking_selection');
   freshness.gaussian_validation = freshness.gaussian_validation === true
     && !pending.has('gaussian_classes') && !pending.has('best_fit_clip')
-    && !pending.has('stacking_selection');
-  freshness.refe_validation = freshness.refe_validation === true
-    && !pending.has('threshold_edits') && !pending.has('best_fit_clip')
     && !pending.has('stacking_selection');
   const reduced = computedValue('range_pdbs_aa');
   freshness.range_pdbs_aa = seamlessState.ready && received.has('range_pdbs_aa')
@@ -1242,7 +1233,6 @@ function attachShare(key: ShareKey, keys: string[], allowUrlFallback = false): v
     case 'interactions':
     case 'bestfit_stackings':
     case 'gaussian_validation':
-    case 'refe_validation':
     case 'gaussian_scores':
       install(value => receiveComputed(key, value));
       break;
@@ -1307,7 +1297,7 @@ async function resynchronizeShares(keys: string[]): Promise<void> {
     'best_fit_clip', 'interaction_matrix', 'gaussian_classes', 'energy_threshold_edits',
     'range_specs', 'structure_id', 'range_pdbs_aa', 'stackings', 'fragments', 'reference_fragment_pdbs',
     'best_fit_thresholds', 'best_fits', 'energetics', 'energy_thresholds', 'interactions',
-    'bestfit_stackings', 'gaussian_validation', 'refe_validation', 'gaussian_scores',
+    'bestfit_stackings', 'gaussian_validation', 'gaussian_scores',
   ];
   const tasks = ordered.filter(key => hasListedShare(key, keys)).map(readShareFresh);
   if (pendingStructureCommit && keys.includes('cif.cif')) tasks.push(readPendingCifFresh());
@@ -1402,7 +1392,7 @@ function attachShareContext(context: ShareContext): void {
       'threshold_edits', 'best_fit_clip', 'interaction_matrix', 'gaussian_classes', 'energy_threshold_edits',
       'range_specs', 'structure_id', 'range_pdbs_aa', 'fragments', 'reference_fragment_pdbs', 'best_fit_thresholds', 'best_fits',
       'energetics', 'energy_thresholds', 'interactions', 'bestfit_stackings', 'gaussian_validation',
-      'refe_validation', 'gaussian_scores',
+      'gaussian_scores',
     ] as const) attachShare(key, keys, initialShareList);
     const cifCell = context['cif.cif'];
     if (cifCell) cifCell.onchange = value => { if (!resyncInProgress) receiveCifCommit(value); };

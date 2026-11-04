@@ -31,19 +31,11 @@ export interface ThresholdPair {
   crmsd: string | null;
 }
 
-export interface ThresholdBase {
-  fragment: number;
-  sequence: string;
-  nuc1_ovrmsd: string | null;
-  nuc2_ovrmsd: string | null;
-}
-
 export interface ThresholdMarker {
   schema: 1;
   basis: FragmentInventory['echo'];
   active: boolean;
   pairs: ThresholdPair[];
-  bases: ThresholdBase[];
 }
 
 /** Copy a JSON decision marker while removing reactive proxies from its object graph. */
@@ -107,13 +99,7 @@ export function makeThresholdSkeleton(
       || pair.up !== Number(pair.down) + 1 || typeof pair.sequence !== 'string') return null;
     pairs.push({ down: Number(pair.down), up: Number(pair.up), sequence: pair.sequence, ovrmsd: null, crmsd: null });
   }
-  const bases: ThresholdBase[] = [];
-  for (const fragment of inventory.fragments) {
-    if (!isRecord(fragment) || typeof fragment.number !== 'number' || !Number.isSafeInteger(fragment.number)
-      || typeof fragment.sequence !== 'string') return null;
-    bases.push({ fragment: Number(fragment.number), sequence: fragment.sequence, nuc1_ovrmsd: null, nuc2_ovrmsd: null });
-  }
-  return { schema: 1, basis: { pdbcode: echo.pdbcode, rna: { ...echo.rna } }, active, pairs, bases };
+  return { schema: 1, basis: { pdbcode: echo.pdbcode, rna: { ...echo.rna } }, active, pairs };
 }
 
 /** RMSD values are finite positive decimals with no more than two decimals. */
@@ -127,13 +113,12 @@ export function validateThresholdValue(value: unknown): boolean {
 /** Match every edit row to T24; null cells are valid while the user fills the table. */
 export function validateThresholdEdits(edits: unknown, inventory: unknown): boolean {
   if (!isRecord(edits) || edits.schema !== 1 || typeof edits.active !== 'boolean'
-    || Object.keys(edits).sort().join(',') !== 'active,bases,basis,pairs,schema'
+    || Object.keys(edits).sort().join(',') !== 'active,basis,pairs,schema'
     || !isRecord(edits.basis) || !isRecord(inventory) || inventory.schema !== 1
     || !isRecord(inventory.echo) || !sameAddress(edits.basis.rna, inventory.echo.rna)
     || edits.basis.pdbcode !== inventory.echo.pdbcode
-    || !Array.isArray(edits.pairs) || !Array.isArray(edits.bases)
-    || !Array.isArray(inventory.adjacent_pairs) || !Array.isArray(inventory.fragments)) return false;
-  if (edits.pairs.length !== inventory.adjacent_pairs.length || edits.bases.length !== inventory.fragments.length) return false;
+    || !Array.isArray(edits.pairs) || !Array.isArray(inventory.adjacent_pairs)) return false;
+  if (edits.pairs.length !== inventory.adjacent_pairs.length) return false;
   for (let index = 0; index < edits.pairs.length; index += 1) {
     const row = edits.pairs[index];
     const source = inventory.adjacent_pairs[index];
@@ -141,14 +126,6 @@ export function validateThresholdEdits(edits: unknown, inventory: unknown): bool
       || row.down !== source.down || row.up !== source.up || row.sequence !== source.sequence
       || !(row.ovrmsd === null || (typeof row.ovrmsd === 'string' && validateThresholdValue(row.ovrmsd)))
       || !(row.crmsd === null || (typeof row.crmsd === 'string' && validateThresholdValue(row.crmsd)))) return false;
-  }
-  for (let index = 0; index < edits.bases.length; index += 1) {
-    const row = edits.bases[index];
-    const source = inventory.fragments[index];
-    if (!isRecord(row) || !isRecord(source)
-      || row.fragment !== source.number || row.sequence !== source.sequence
-      || !(row.nuc1_ovrmsd === null || (typeof row.nuc1_ovrmsd === 'string' && validateThresholdValue(row.nuc1_ovrmsd)))
-      || !(row.nuc2_ovrmsd === null || (typeof row.nuc2_ovrmsd === 'string' && validateThresholdValue(row.nuc2_ovrmsd)))) return false;
   }
   return true;
 }
@@ -284,22 +261,18 @@ export function canContinueStage4(options: {
   fragmentCount: number;
   clip: unknown;
   selectedCandidates: CandidateInput;
+  thresholdsFresh: boolean;
   energeticsFresh: boolean;
   thresholdValidatorFailed: boolean;
 }): boolean {
-  const { edits, fragmentCount, clip, selectedCandidates, energeticsFresh, thresholdValidatorFailed } = options;
-  if (!energeticsFresh || thresholdValidatorFailed || !validClip(clip, fragmentCount, selectedCandidates)
-    || !isRecord(edits) || edits.active !== true || !Array.isArray(edits.pairs) || !Array.isArray(edits.bases)) return false;
+  const { edits, fragmentCount, clip, selectedCandidates, thresholdsFresh, energeticsFresh, thresholdValidatorFailed } = options;
+  if (!thresholdsFresh || !energeticsFresh || thresholdValidatorFailed
+    || !validClip(clip, fragmentCount, selectedCandidates)
+    || !isRecord(edits) || edits.active !== true || !Array.isArray(edits.pairs)) return false;
   const currentClip = clip as ClipMarker;
   if (isRecord(edits.basis) && currentClip.basis && !sameAddress(edits.basis.rna, currentClip.basis.rna)) return false;
   const kept = new Set(Array.from({ length: fragmentCount - currentClip.clip1 - currentClip.clip2 },
     (_, index) => index + currentClip.clip1 + 1));
-  for (const row of edits.bases) {
-    if (!isRecord(row) || !Number.isSafeInteger(row.fragment)) return false;
-    if (kept.has(Number(row.fragment))
-      && (typeof row.nuc1_ovrmsd !== 'string' || typeof row.nuc2_ovrmsd !== 'string'
-        || !validateThresholdValue(row.nuc1_ovrmsd) || !validateThresholdValue(row.nuc2_ovrmsd))) return false;
-  }
   for (const row of edits.pairs) {
     if (!isRecord(row) || !Number.isSafeInteger(row.down) || !Number.isSafeInteger(row.up)) return false;
     if (kept.has(Number(row.down)) && kept.has(Number(row.up))
@@ -316,16 +289,12 @@ export function copyComputedThresholds(
   confirmed: boolean,
 ): ThresholdMarker {
   if (!confirmed || !isRecord(computed) || computed.schema !== 1
-    || !Array.isArray(computed.pairs) || !Array.isArray(computed.bases)) return edits;
+    || !Array.isArray(computed.pairs)) return edits;
   const computedPairs = new Map<string, UnknownRecord>();
   for (const value of computed.pairs) {
     if (isRecord(value) && Number.isSafeInteger(value.down) && Number.isSafeInteger(value.up)) {
       computedPairs.set(`${value.down}:${value.up}`, value);
     }
-  }
-  const computedBases = new Map<number, UnknownRecord>();
-  for (const value of computed.bases) {
-    if (isRecord(value) && Number.isSafeInteger(value.fragment)) computedBases.set(Number(value.fragment), value);
   }
   return {
     ...edits,
@@ -334,12 +303,6 @@ export function copyComputedThresholds(
       if (!source || typeof source.ovrmsd !== 'string' || typeof source.crmsd !== 'string'
         || !validateThresholdValue(source.ovrmsd) || !validateThresholdValue(source.crmsd)) return row;
       return { ...row, ovrmsd: source.ovrmsd, crmsd: source.crmsd };
-    }),
-    bases: edits.bases.map(row => {
-      const source = computedBases.get(row.fragment);
-      if (!source || typeof source.nuc1_ovrmsd !== 'string' || typeof source.nuc2_ovrmsd !== 'string'
-        || !validateThresholdValue(source.nuc1_ovrmsd) || !validateThresholdValue(source.nuc2_ovrmsd)) return row;
-      return { ...row, nuc1_ovrmsd: source.nuc1_ovrmsd, nuc2_ovrmsd: source.nuc2_ovrmsd };
     }),
   };
 }
@@ -353,18 +316,9 @@ function isThresholdPair(value: unknown): value is ThresholdPair {
     && (value.crmsd === null || typeof value.crmsd === 'string');
 }
 
-function isThresholdBase(value: unknown): value is ThresholdBase {
-  return isRecord(value)
-    && Number.isSafeInteger(value.fragment)
-    && typeof value.sequence === 'string'
-    && (value.nuc1_ovrmsd === null || typeof value.nuc1_ovrmsd === 'string')
-    && (value.nuc2_ovrmsd === null || typeof value.nuc2_ovrmsd === 'string');
-}
-
-function hasThresholdRows(value: unknown): value is Pick<ThresholdMarker, 'schema' | 'active' | 'pairs' | 'bases'> {
+function hasThresholdRows(value: unknown): value is Pick<ThresholdMarker, 'schema' | 'active' | 'pairs'> {
   return isRecord(value) && value.schema === 1 && typeof value.active === 'boolean'
-    && Array.isArray(value.pairs) && value.pairs.every(isThresholdPair)
-    && Array.isArray(value.bases) && value.bases.every(isThresholdBase);
+    && Array.isArray(value.pairs) && value.pairs.every(isThresholdPair);
 }
 
 export function thresholdsCompleteForClip(
@@ -380,8 +334,6 @@ export function thresholdsCompleteForClip(
   const kept = new Set(Array.from({ length: fragmentCount - currentClip.clip1 - currentClip.clip2 },
     (_, index) => index + currentClip.clip1 + 1));
   const filled = (value: unknown): boolean => typeof value === 'string' && validateThresholdValue(value);
-  return marker.bases.every(row => !kept.has(row.fragment)
-      || (filled(row.nuc1_ovrmsd) && filled(row.nuc2_ovrmsd)))
-    && marker.pairs.every(row => !kept.has(row.down) || !kept.has(row.up)
-      || (filled(row.ovrmsd) && filled(row.crmsd)));
+  return marker.pairs.every(row => !kept.has(row.down) || !kept.has(row.up)
+    || (filled(row.ovrmsd) && filled(row.crmsd)));
 }

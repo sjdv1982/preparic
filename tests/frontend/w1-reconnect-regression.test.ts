@@ -17,7 +17,7 @@ class Cell implements SharedCell {
   emit(value: SharedValue) { this.value = value; this.onchange(value); }
 }
 
-function setup() {
+function setup(beforeConnect: (cells: Record<string, Cell>) => void = () => undefined) {
   const doc = (value: unknown) => JSON.stringify(value);
   const values: Record<string, SharedValue> = {
     pdbcode: '1B7F', biounit: '1',
@@ -29,17 +29,23 @@ function setup() {
     structure_id: '1B7F',
     fragments: doc({ schema: 1, echo: { pdbcode: '1B7F', rna }, residues: [], fragments: [], adjacent_pairs: [] }),
   };
-  const cells = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, new Cell(value, `/preparic/${key}`)]));
+  const cells = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, new Cell(value, `/preparic/${key}`)])) as Record<string, Cell>;
   const socket = { readyState: 1 };
   const context = {
     ...cells,
     self: { sharelist: [], onsharelist: (_keys: string[]) => undefined,
       server: 'http://w1.invalid', ws: socket as unknown as WebSocket },
   } as unknown as ShareContext;
+  beforeConnect(cells);
   connectToSeamless(() => context);
   context.self.onsharelist(Object.keys(cells));
   for (const cell of Object.values(cells)) cell.emit(cell.value);
   return { context, cells, socket };
+}
+
+
+async function flushPromiseQueue(): Promise<void> {
+  for (let index = 0; index < 8; index += 1) await Promise.resolve();
 }
 
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -47,7 +53,24 @@ afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals()
 describe('W1 P5/P9 reconnect requires a current-connection read of each result', () => {
   it.each(['omitted', 'failed'] as const)('keeps retained matching payload stale when its reread is %s', async mode => {
     vi.useFakeTimers();
-    const { context, cells, socket } = setup();
+    const requested: string[] = [];
+    let reconnecting = false;
+    const { context, cells, socket } = setup(initialCells => {
+      vi.stubGlobal('fetch', vi.fn(async (url: URL) => {
+        const key = url.pathname.split('/').pop()!;
+        requested.push(key);
+        if (reconnecting && key === 'fragments' && mode === 'failed') {
+          return new Response('unavailable', { status: 503 });
+        }
+        const value = initialCells[key]?.value ?? null;
+        return new Response(value === null ? null : String(value), {
+          status: value === null ? 204 : 200, headers: { 'x-seamless-marker': '1' },
+        });
+      }));
+    });
+    await flushPromiseQueue();
+    expect(requested.filter(key => key === 'fragments')).toHaveLength(1);
+    requested.length = 0;
     expect(seamlessState.ready).toBe(true);
     expect(seamlessState.computedFreshness.fragments).toBe(true);
     const oldPayload = JSON.parse(JSON.stringify(seamlessState.computed.fragments));
@@ -59,16 +82,7 @@ describe('W1 P5/P9 reconnect requires a current-connection read of each result',
     expect(seamlessState.computed.fragments).toEqual(oldPayload); // retained behind overlay
     expect(seamlessState.computedFreshness.fragments).not.toBe(true);
 
-    const requested: string[] = [];
-    vi.stubGlobal('fetch', vi.fn(async (url: URL) => {
-      const key = url.pathname.split('/').pop()!;
-      requested.push(key);
-      if (key === 'fragments' && mode === 'failed') return new Response('unavailable', { status: 503 });
-      const value = cells[key].value;
-      return new Response(value === null ? null : String(value), {
-        status: value === null ? 204 : 200, headers: { 'x-seamless-marker': '1' },
-      });
-    }));
+    reconnecting = true;
     socket.readyState = 1;
     context.self.onsharelist(Object.keys(cells).filter(key => mode !== 'omitted' || key !== 'fragments'));
     await vi.advanceTimersByTimeAsync(0);

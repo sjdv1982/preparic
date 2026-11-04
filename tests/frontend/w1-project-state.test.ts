@@ -34,7 +34,6 @@ function project() {
         { down: 1, up: 2, sequence: 'ACG', ovrmsd: null, crmsd: null },
         { down: 2, up: 3, sequence: 'CGU', ovrmsd: null, crmsd: null },
       ],
-      bases: keys.map((fragment, i) => ({ fragment: i + 1, sequence: ['AC', 'CG', 'GU'][i], nuc1_ovrmsd: null, nuc2_ovrmsd: null })),
     },
     best_fit_clip: { schema: 1, basis: rnaBasis, clip1: 0, clip2: 0 },
     interaction_matrix: {
@@ -230,4 +229,54 @@ describe('W1: state-graph errors are scoped to their stage and pending inputs (O
     expect(errors[0].state).toBe('blocked');
     expect(errors[0].message).toMatch(/blocked/i);
   });
+});
+
+it('W8b refuses legacy editable bases and restores from contiguous pair identities only', () => {
+  const state: any = project();
+  expect(markerIsWellFormed('threshold_edits', { ...state.threshold_edits, bases: [] })).toBe(false);
+  for (const pairs of [
+    [{ down: 2, up: 3, sequence: 'CGU', ovrmsd: null, crmsd: null }],
+    [{ down: 1, up: 2, sequence: 'ACG', ovrmsd: null, crmsd: null }, { down: 2, up: 3, sequence: 'CAU', ovrmsd: null, crmsd: null }],
+    [state.threshold_edits.pairs[0], { down: 3, up: 4, sequence: 'GUA', ovrmsd: null, crmsd: null }],
+  ]) {
+    const malformed = structuredClone(state);
+    malformed.threshold_edits.pairs = pairs;
+    expect(deriveProjectStage(malformed)).toBeLessThan(5);
+  }
+  state.best_fit_clip.clip1 = 1;
+  state.best_fit_clip.clip2 = 1;
+  state.interaction_matrix.rows = ['frag-2-CG'];
+  state.interaction_matrix.grid = [[true]];
+  expect(deriveProjectStage(state)).toBe(6);
+  state.best_fit_clip.clip1 = 0; // a clip edit racing Continue cannot restore the old extent
+  expect(deriveProjectStage(state)).toBe(4);
+});
+
+it('W8b restores a singleton before computed inventory arrives and ignores result refreshes', () => {
+  const state: any = project();
+  const singletonRna = { ...rna, end: 102 };
+  state.ranges.rows = [singletonRna, protein];
+  state.stacking_selection.basis = { ...state.stacking_selection.basis, rows: state.ranges.rows };
+  state.threshold_edits.basis = { ...rnaBasis, rna: singletonRna };
+  state.best_fit_clip.basis = state.threshold_edits.basis;
+  state.threshold_edits.pairs = [];
+  state.interaction_matrix.rows = ['frag-1-AC'];
+  state.interaction_matrix.grid = [[true]];
+  expect(deriveProjectStage(state)).toBe(6);
+  for (const result of [null, { fragments: [] }, { fragments: [{ key: 'frag-1-UU' }] }]) {
+    state.fragments = result;
+    state.best_fit_thresholds = result;
+    state.best_fits = result;
+    state.energetics = result;
+    expect(deriveProjectStage(state)).toBe(6);
+  }
+  for (const rows of [[], ['frag-2-AC'], ['frag-1-AC', 'frag-2-CG'], ['frag-1-INVALID']]) {
+    state.interaction_matrix.rows = rows;
+    state.interaction_matrix.grid = rows.map(() => [true]);
+    expect(deriveProjectStage(state)).toBe(4);
+  }
+  state.interaction_matrix.rows = ['frag-1-AC'];
+  state.interaction_matrix.grid = [[true]];
+  state.best_fit_clip.clip1 = 1;
+  expect(deriveProjectStage(state)).toBe(4);
 });

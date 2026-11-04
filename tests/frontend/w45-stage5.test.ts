@@ -9,7 +9,7 @@ import {
   validateStage5MatrixRead, setStage5UntilNextAnchor,
 } from '../../src/lib/stage5';
 
-const keys = Array.from({ length: 9 }, (_, i) => `frag-${i + 1}-GU`);
+const keys = Array.from({ length: 9 }, (_, i) => `frag-${i + 1}-UU`);
 const rna = { chain: 'A', start: 101, end: 110 };
 const rangeRows = [rna, { chain: 'B', start: 1, end: 20 }, { chain: 'C', start: 5, end: 25 }];
 const basis = { pdbcode: '1B7F', rna };
@@ -37,8 +37,8 @@ function gateFixture(): { snapshot: any; state: any } {
   const snapshot = { pdbcode: '1B7F', biounit: 1,
     ranges: { schema: 1, active: true, basis: { pdbcode: '1B7F', biounit: 1 }, rows: rangeRows },
     stacking_selection: structuredClone(selection),
-    threshold_edits: { schema: 1, basis, active: true, pairs: [],
-      bases: keys.map((_, i) => ({ fragment: i + 1, sequence: 'GU', nuc1_ovrmsd: '1.00', nuc2_ovrmsd: '1.00' })) },
+    threshold_edits: { schema: 1, basis, active: true,
+      pairs: keys.slice(1).map((_, i) => ({ down: i + 1, up: i + 2, sequence: 'UUU', ovrmsd: '1.00', crmsd: '1.00' })) },
     best_fit_clip: clip, interaction_matrix: value, gaussian_classes: null };
   return { snapshot, state: { ready: true, stage: 5, energeticsFresh: true, bestFitsFresh: true,
     geometryFresh: true, gaussianFresh: true, gaussianClassesValid: true, validatorFailed: false,
@@ -430,13 +430,13 @@ describe('W5 P5.3/P5.4 range columns, anchor locks, and Recompute', () => {
 describe('W4/W5 integrated contract wiring', () => {
   const source = (path: string) => readFileSync(resolve(process.cwd(), path), 'utf8');
 
-  it('4→5 action does not require a fresh Copy source for typed thresholds', () => {
+  it('4→5 action requires fresh computed thresholds for typed pair thresholds', () => {
     const app = source('src/App.svelte');
     const start = app.indexOf('async function continueToStage5()');
     const end = app.indexOf('async function backToStage4()', start);
     const transition = app.slice(start, end);
     expect(transition).toContain('canContinueStage4');
-    expect(transition).not.toContain('computedFreshness.best_fit_thresholds');
+    expect(transition).toContain('thresholdsFresh: seamlessState.computedFreshness.best_fit_thresholds');
   });
 
   it('renders one accessible range column with the selected anchors and locks in its header', () => {

@@ -1,4 +1,4 @@
-"""Contract-focused W7 backend checks for T18-T23 and T28."""
+"""Contract-focused W7 backend checks for T18-T22 and T28."""
 from __future__ import annotations
 
 import copy
@@ -302,38 +302,6 @@ def test_b10_implied_rejection_is_non_green_and_has_no_invented_fill():
     assert merged["rows"][0]["worst_state"] == "implied"
 
 
-def _reference_case(threshold):
-    case = tiny_case()
-    fragments, stackings, selection, clip, fits, _ = case
-    edit = {"schema": 1, "basis": {"pdbcode": "1B7F", "rna": {"chain": "A", "start": 1, "end": 2}},
-            "active": True, "pairs": [], "bases": [{"fragment": 1, "sequence": "AA",
-             "nuc1_ovrmsd": threshold, "nuc2_ovrmsd": "1.00"}]}
-    computed = {"schema": 1, "bases": [{"fragment": 1, "sequence": "AA",
-                "nuc1_ovrmsd": "1.00", "nuc1_ovrmsd_raw": 1.0,
-                "nuc2_ovrmsd": "1.00", "nuc2_ovrmsd_raw": 1.0}]}
-    return stage6.validate_refe_anchors(edit, computed, fragments, stackings, selection, clip, fits)
-
-
-@pytest.mark.parametrize("threshold,status", [
-    ("1.00002", "green"), ("1.00001", "green"), ("1.00000", "amber"),
-    ("0.99999", "red"), ("0.99998", "red"),
-])
-def test_b11_t23_reads_only_s11_base_values_and_has_exact_boundary(threshold, status):
-    result = _reference_case(threshold)
-    assert result["rows"][0]["status"] == status
-    assert result["rows"][0]["threshold"] == threshold
-    assert result["rows"][0]["raw"] == 1.0
-    assert set(result["rows"][0]) >= {"key", "fragment", "nucleotide", "computed", "raw", "threshold", "delta", "status"}
-
-
-@pytest.mark.parametrize("threshold,blocked", [
-    ("1.73", False), (str(math.sqrt(3.0)), False), (str(math.nextafter(math.sqrt(3.0), math.inf)), True), ("1.74", True),
-])
-def test_b12_t23_uses_lov_as_a_hard_blocker(threshold, blocked):
-    row = _reference_case(threshold)["rows"][0]
-    assert row["blocked"] is blocked
-    assert (row["status"] == "blocked") is blocked
-
 
 def test_b13_s11_threshold_edits_do_not_enter_t20_or_t28_identity():
     case = tiny_case(fragment_count=11, anchor_resid=6)
@@ -501,7 +469,7 @@ def test_b16_browser_receives_no_gaussian_model_or_density_kernel():
 @pytest.mark.parametrize("anchor_resid,clip_values,kept_fragment,clipped_fragment", [
     (2, (1, 0), 2, 1), (3, (0, 1), 2, 3),
 ])
-def test_w8a_kept_candidate_alone_controls_jobs_classes_and_both_validation_panels(
+def test_w8a_kept_candidate_alone_controls_jobs_classes_and_gaussian_validation(
     anchor_resid, clip_values, kept_fragment, clipped_fragment,
 ):
     clip = {"schema": 1, "basis": None, "clip1": clip_values[0], "clip2": clip_values[1]}
@@ -531,20 +499,19 @@ def test_w8a_kept_candidate_alone_controls_jobs_classes_and_both_validation_pane
     assert merged["rows"][0]["worst_state"] == "green"
     assert len(merged["rows"][0]["candidates"]) == 1
     assert marker == marker_before  # changed aggregation never overwrites edited classes
-    edits = {"schema": 1, "active": True, "bases": [
-        {"fragment": n, "sequence": "AA", "nuc1_ovrmsd": "0.50" if n == clipped_fragment else "1.10",
-         "nuc2_ovrmsd": "0.50" if n == clipped_fragment else "1.10"} for n in range(1, 4)]}
-    computed = {"schema": 1, "bases": [
-        {"fragment": n, "sequence": "AA", "nuc1_ovrmsd": "1.01", "nuc2_ovrmsd": "1.01",
-         "nuc1_ovrmsd_raw": 1.0, "nuc2_ovrmsd_raw": 1.0} for n in range(1, 4)]}
-    reference = stage6.validate_refe_anchors(edits, computed, fragments, stackings, selection, clip, fits)
-    assert [(row["fragment"], row["status"]) for row in reference["rows"]] == [(kept_fragment, "green")]
     unclip = {**clip, "clip1": 0, "clip2": 0}
     uncovered_jobs = stage6.gaussian_check_jobs(fits, fragments, stackings, selection, unclip)
     assert len(uncovered_jobs["jobs"]) == 2
     uncovered = stage6.merge_gaussian_validation(check_result(uncovered_jobs), uncovered_jobs, marker,
         selection, unclip, fits, MODEL_JSON, gaussian_filter)
     assert uncovered["rows"][0]["worst_state"] != "green"
-    reference = stage6.validate_refe_anchors(edits, computed, fragments, stackings, selection, unclip, fits)
-    assert {row["status"] for row in reference["rows"]} == {"green", "red"}
     assert marker == marker_before
+
+
+def test_w8b_reference_validation_transformer_is_removed():
+    assert not hasattr(stage6, "validate_refe_anchors")
+    import backend
+    source = Path(backend.__file__).read_text()
+    assert "context.validate_refe_anchors" not in source
+    assert "context.refe_validation" not in source
+    assert "refe-validation.json" not in source

@@ -14,7 +14,6 @@ from typing import Any
 _FRAGMENT_FILE = re.compile(r"^frag-([1-9][0-9]*)-([ACGU]{2})-refe\.pdb$")
 _FRAGMENT_KEY = re.compile(r"^frag-([1-9][0-9]*)-([ACGU]{2})$")
 _PAIR_KEYS = {"down", "up", "sequence", "ovrmsd", "crmsd"}
-_BASE_KEYS = {"fragment", "sequence", "nuc1_ovrmsd", "nuc2_ovrmsd"}
 
 
 def _canonical_base(resname: str) -> str | None:
@@ -378,18 +377,16 @@ def _validate_threshold_edits(edits: object, fragments: object) -> None:
     if type(fragments) is not dict or type(fragments.get("schema")) is not int \
         or fragments.get("schema") != 1:
         raise ValueError("The canonical fragment list is not ready.")
-    if set(edits) != {"schema", "basis", "active", "pairs", "bases"}:
+    if set(edits) != {"schema", "basis", "active", "pairs"}:
         raise ValueError("Threshold edits do not match schema 1.")
     if edits.get("basis") != fragments.get("echo"):
         raise ValueError("Threshold edits belong to a different RNA range.")
     expected_pairs = fragments.get("adjacent_pairs")
-    expected_fragments = fragments.get("fragments")
-    if not isinstance(expected_pairs, list) or not isinstance(expected_fragments, list):
+    if not isinstance(expected_pairs, list):
         raise ValueError("The canonical fragment list is malformed.")
     pairs = edits.get("pairs")
-    bases = edits.get("bases")
-    if not isinstance(pairs, list) or not isinstance(bases, list):
-        raise ValueError("Threshold pair and base rows must be lists.")
+    if not isinstance(pairs, list):
+        raise ValueError("Threshold pair rows must be a list.")
     expected_pair_rows = [(row.get("down"), row.get("up"), row.get("sequence")) for row in expected_pairs if isinstance(row, dict)]
     actual_pair_rows = []
     for row in pairs:
@@ -401,19 +398,6 @@ def _validate_threshold_edits(edits: object, fragments: object) -> None:
         actual_pair_rows.append((row["down"], row["up"], row["sequence"]))
     if actual_pair_rows != expected_pair_rows:
         raise ValueError("Threshold pair rows do not match the current fragment list.")
-
-    expected_base_rows = [
-        (row.get("number"), row.get("sequence")) for row in expected_fragments if isinstance(row, dict)
-    ]
-    actual_base_rows = []
-    for row in bases:
-        if not _valid_threshold_row(row, _BASE_KEYS, ("nuc1_ovrmsd", "nuc2_ovrmsd")):
-            raise ValueError("A base threshold row has invalid fields or values.")
-        if type(row["fragment"]) is not int or row["fragment"] < 1 or not isinstance(row["sequence"], str):
-            raise ValueError("A base threshold row has an invalid fragment address.")
-        actual_base_rows.append((row["fragment"], row["sequence"]))
-    if actual_base_rows != expected_base_rows:
-        raise ValueError("Threshold base rows do not match the current fragment list.")
     return None
 
 
@@ -586,10 +570,9 @@ def _clip_fragments(
     # Build membership from exact fragment numbers to avoid sequence-key ambiguity.
     kept_numbers = {int(_FRAGMENT_KEY.fullmatch(key).group(1)) for key in kept_keys}
     kept_pairs = [row for row in pairs if row["down"] in kept_numbers and row["up"] in kept_numbers]
-    kept_bases = [row for row in thresholds["bases"] if row["fragment"] in kept_numbers]
     kept_residue_ids = {json.dumps(identity, sort_keys=True) for row in kept_rows for identity in row["residues"]}
     kept_residues = [identity for identity in fragments["residues"] if json.dumps(identity, sort_keys=True) in kept_residue_ids]
-    output["thresholds.json"] = (json.dumps({"schema": 1, "pairs": kept_pairs, "bases": kept_bases}, sort_keys=True) + "\n").encode("utf-8")
+    output["thresholds.json"] = (json.dumps({"schema": 1, "pairs": kept_pairs}, sort_keys=True) + "\n").encode("utf-8")
     output["clip.json"] = (json.dumps({
         "schema": 1,
         "clip1": clip["clip1"],

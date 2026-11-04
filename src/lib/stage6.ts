@@ -218,9 +218,3 @@ export function gaussianReferenceRows(scores: unknown, selectedKeys: readonly st
   return scores.reference_scores.filter((row: unknown): row is RecordValue =>
     isRecord(row) && selected.has(row.key));
 }
-
-export function referenceAnchorState(value: unknown): 'green' | 'amber' | 'red' | 'blocked' | 'missing' | 'error' {
-  if (!isRecord(value) || typeof value.status !== 'string') return 'error';
-  if (['green', 'amber', 'red', 'blocked', 'missing'].includes(value.status)) return value.status as any;
-  return 'error';
-}

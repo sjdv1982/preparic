@@ -47,7 +47,6 @@ function setup(stage: 5 | 6) {
     stacking_selection: doc({ schema: 1, basis: { pdbcode: '1B7F', biounit: 1, rows }, active: true, selected: {} }),
     threshold_edits: doc({
       schema: 1, basis, active: true, pairs: [],
-      bases: [{ fragment: 1, sequence: 'AC', nuc1_ovrmsd: null, nuc2_ovrmsd: null }],
     }),
     best_fit_clip: doc({ schema: 1, basis, clip1: 0, clip2: 0 }),
     interaction_matrix: doc({

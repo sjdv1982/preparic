@@ -54,7 +54,6 @@ const TRANSFORMER_STAGE: Record<string, ProjectStage> = {
   gaussian_check: 6,
   gaussian_scores_transformer: 5,
   merge_gaussian_validation: 6,
-  validate_refe_anchors: 6,
   gaussian_scores: 6,
 };
 
@@ -90,7 +89,6 @@ const TRANSFORMER_INPUTS: Record<string, ReadonlySet<string>> = {
   gaussian_check: new Set(['gaussian_check_transformer']),
   gaussian_scores_transformer: new Set(['bestfit_stackings', 'stackings', 'stacking_selection', 'best_fit_clip', 'fragments', 'gaussian_model_json']),
   merge_gaussian_validation: new Set(['gaussian_check', 'gaussian_check_jobs', 'gaussian_classes', 'stacking_selection', 'best_fit_clip', 'best_fits', 'gaussian_model_json', 'validate_gaussian_classes']),
-  validate_refe_anchors: new Set(['threshold_edits', 'best_fit_thresholds', 'fragments', 'stackings', 'stacking_selection', 'best_fit_clip', 'best_fits']),
   gaussian_scores: new Set(['bestfit_stackings', 'stackings', 'stacking_selection', 'best_fit_clip', 'fragments', 'gaussian_model_json']),
 };
 
@@ -191,9 +189,9 @@ function isSelectionMarker(value: unknown): value is AnyRecord & { active: boole
 }
 
 function validThresholdMarker(value: unknown): boolean {
-  if (!isRecord(value) || !hasOnlyKeys(value, ['schema', 'basis', 'active', 'pairs', 'bases']) || value.schema !== 1
+  if (!isRecord(value) || !hasOnlyKeys(value, ['schema', 'basis', 'active', 'pairs']) || value.schema !== 1
     || !validRnaBasis(value.basis) || typeof value.active !== 'boolean'
-    || !Array.isArray(value.pairs) || !Array.isArray(value.bases)) return false;
+    || !Array.isArray(value.pairs)) return false;
 
   const pairIds: string[] = [];
   for (const pair of value.pairs) {
@@ -204,18 +202,7 @@ function validThresholdMarker(value: unknown): boolean {
       || !(pair.crmsd === null || validRoundedPositive(pair.crmsd))) return false;
     pairIds.push(`${pair.down}:${pair.up}`);
   }
-  if (!isUnique(pairIds)) return false;
-
-  const baseIds: number[] = [];
-  for (const base of value.bases) {
-    if (!isRecord(base) || !hasOnlyKeys(base, ['fragment', 'sequence', 'nuc1_ovrmsd', 'nuc2_ovrmsd'])
-      || !isInteger(base.fragment) || base.fragment < 1
-      || typeof base.sequence !== 'string' || !/^[ACGU]{2}$/.test(base.sequence)
-      || !(base.nuc1_ovrmsd === null || validRoundedPositive(base.nuc1_ovrmsd))
-      || !(base.nuc2_ovrmsd === null || validRoundedPositive(base.nuc2_ovrmsd))) return false;
-    baseIds.push(base.fragment);
-  }
-  return isUnique(baseIds);
+  return isUnique(pairIds);
 }
 
 function validClip(value: unknown): boolean {
@@ -296,14 +283,34 @@ function currentRnaRange(snapshot: ProjectSnapshot): RangeAddress | null {
 
 function matrixRowsMatchClip(matrix: AnyRecord, snapshot: ProjectSnapshot): boolean {
   if (!Array.isArray(matrix.rows) || !isRecord(snapshot.threshold_edits)
-    || !Array.isArray(snapshot.threshold_edits.bases)
+    || !Array.isArray(snapshot.threshold_edits.pairs)
     || !markerIsWellFormed('best_fit_clip', snapshot.best_fit_clip)) return false;
   const clip = snapshot.best_fit_clip as AnyRecord & { clip1: number; clip2: number };
   const rna = currentRnaRange(snapshot);
   if (!rna || !validRnaBasis(clip.basis)
     || !sameValue(clip.basis, { pdbcode: snapshot.pdbcode, rna })) return false;
-  const bases = snapshot.threshold_edits.bases as AnyRecord[];
-  const allKeys = bases.map(base => `frag-${base.fragment}-${base.sequence}`);
+  const pairs = snapshot.threshold_edits.pairs as AnyRecord[];
+  let allKeys: string[];
+  if (pairs.length === 0) {
+    if (clip.clip1 !== 0 || clip.clip2 !== 0 || matrix.rows.length !== 1
+      || typeof matrix.rows[0] !== 'string' || !/^frag-1-[ACGU]{2}$/.test(matrix.rows[0])) return false;
+    allKeys = [matrix.rows[0]];
+  } else {
+    allKeys = [];
+    for (let index = 0; index < pairs.length; index += 1) {
+      const pair = pairs[index];
+      if (!isRecord(pair) || pair.down !== index + 1 || pair.up !== index + 2
+        || typeof pair.sequence !== 'string' || !/^[ACGU]{3}$/.test(pair.sequence)) return false;
+      if (index === 0) {
+        allKeys.push(`frag-1-${pair.sequence.slice(0, 2)}`);
+      } else {
+        const previous = pairs[index - 1];
+        if (!isRecord(previous) || pair.sequence.slice(0, 2) !== String(previous.sequence).slice(1, 3)) return false;
+        allKeys.push(`frag-${index + 1}-${pair.sequence.slice(0, 2)}`);
+      }
+    }
+    allKeys.push(`frag-${pairs.length + 1}-${String(pairs[pairs.length - 1].sequence).slice(1, 3)}`);
+  }
   if (new Set(allKeys).size !== allKeys.length || clip.clip1 + clip.clip2 >= allKeys.length) return false;
   const expectedRows = allKeys.slice(clip.clip1, allKeys.length - clip.clip2);
   const expectedRanges = isRangeMarker(snapshot.ranges)

@@ -54,7 +54,6 @@ function filled() {
   const table = makeThresholdSkeleton(fragments, '1B7F');
   if (!table) throw new Error('Expected a threshold skeleton for the valid inventory.');
   table.pairs.forEach((row: any) => { row.ovrmsd = '0.25'; row.crmsd = '0.50'; });
-  table.bases.forEach((row: any) => { row.nuc1_ovrmsd = '0.75'; row.nuc2_ovrmsd = '1.00'; });
   return table;
 }
 
@@ -114,7 +113,6 @@ describe('W3 stage 4 decisions (OC P4.3, D4/D5)', () => {
     const table = makeThresholdSkeleton(fragments, '1B7F');
     expect(table).toEqual({ schema: 1, basis, active: true,
       pairs: fragments.adjacent_pairs.map((row: any) => ({ ...row, ovrmsd: null, crmsd: null })),
-      bases: sequences.map((sequence, i) => ({ fragment: i + 1, sequence, nuc1_ovrmsd: null, nuc2_ovrmsd: null })),
     });
     expect(validateThresholdEdits(table, fragments)).toBe(true);
     expect(thresholdsCompleteForClip(table, 3, clip)).toBe(false);
@@ -128,10 +126,8 @@ describe('W3 stage 4 decisions (OC P4.3, D4/D5)', () => {
     expect(validateThresholdValue(value)).toBe(false);
   });
 
-  it('requires only kept base/pair cells and closes when an empty row is uncovered', () => {
+  it('requires only kept pair cells and closes when an empty row is uncovered', () => {
     const table = filled();
-    table.bases[0].nuc1_ovrmsd = null;
-    table.bases[0].nuc2_ovrmsd = null;
     table.pairs[0].ovrmsd = null;
     table.pairs[0].crmsd = null;
     expect(thresholdsCompleteForClip(table, 3, { ...clip, clip1: 1 })).toBe(true);
@@ -142,25 +138,29 @@ describe('W3 stage 4 decisions (OC P4.3, D4/D5)', () => {
     expect(validateThresholdEdits({ ...filled(), schema: 2 }, fragments)).toBe(false);
     expect(validateThresholdEdits({ ...filled(), schema: true }, fragments)).toBe(false);
     const table = filled();
-    table.bases.push({ ...table.bases[0] });
+    table.pairs.push({ ...table.pairs[0] });
     expect(validateThresholdEdits(table, fragments)).toBe(false);
+  });
+
+  it('refuses a legacy bases member instead of migrating it', () => {
+    expect(validateThresholdEdits({ ...filled(), bases: [] }, fragments)).toBe(false);
   });
 
   it('copies only explicit rounded values after confirmation, preserving decision basis', () => {
     const table = filled();
-    table.bases[0].nuc1_ovrmsd = '1.25';
+    table.pairs[0].ovrmsd = '1.25';
     const computed: any = { schema: 1, echo: { pdb_code: '1b7f', rna, resids: residues },
       pairs: table.pairs.map((row: any) => ({ ...row, ovrmsd: '0.26', crmsd: '0.51', ovrmsd_raw: 0.25, crmsd_raw: 0.5 })),
-      bases: table.bases.map((row: any) => ({ ...row, nuc1_ovrmsd: '0.76', nuc2_ovrmsd: '1.01', nuc1_ovrmsd_raw: 0.75, nuc2_ovrmsd_raw: 1 })),
+      bases: [{ fragment: 1, sequence: 'AC', nuc1_ovrmsd: '0.76', nuc2_ovrmsd: '1.01', nuc1_ovrmsd_raw: 0.75, nuc2_ovrmsd_raw: 1 }],
     };
     const before = structuredClone(table);
     expect(copyComputedThresholds(table, computed, false)).toEqual(before);
     expect(copyComputedThresholds(table, null, true)).toEqual(before);
     const copied = copyComputedThresholds(table, computed, true);
     expect(copied.basis).toEqual(basis);
-    expect(copied.bases[0].nuc1_ovrmsd).toBe('0.76');
+    expect(copied).not.toHaveProperty('bases');
     expect(copied.pairs[0].ovrmsd).toBe('0.26');
-    expect(copied.bases[0]).not.toHaveProperty('nuc1_ovrmsd_raw');
+    expect(copied.pairs[0]).not.toHaveProperty('ovrmsd_raw');
     expect(table).toEqual(before);
   });
 
@@ -215,13 +215,24 @@ describe('W3 forward gates use current data without waiting for the fit', () => 
     expect(canEnterStage4({ ...enter, selection: { ...selection, selected: { ...selection.selected, orphan: true } } })).toBe(false);
   });
 
-  it('test_continue_4_to_5_accepts_complete_typed_thresholds_while_copy_source_stale', () => {
-    const args = { edits: filled(), fragmentCount: 3, clip, selectedCandidates: [[1, 2]], energeticsFresh: true, thresholdValidatorFailed: false };
+  it('requires fresh computed thresholds even for complete typed pair thresholds', () => {
+    const args = { edits: filled(), fragmentCount: 3, clip, selectedCandidates: [[1, 2]], energeticsFresh: true, thresholdsFresh: true, thresholdValidatorFailed: false };
     expect(canContinueStage4(args)).toBe(true);
+    expect(canContinueStage4({ ...args, thresholdsFresh: false })).toBe(false);
     expect(canContinueStage4({ ...args, energeticsFresh: false })).toBe(false);
     expect(canContinueStage4({ ...args, thresholdValidatorFailed: true })).toBe(false);
     expect(canContinueStage4({ ...args, clip: { ...clip, clip1: 1 } })).toBe(true);
     expect(canContinueStage4({ ...args, clip: { ...clip, clip1: 2 } })).toBe(false);
     expect(canContinueStage4({ ...args, edits: makeThresholdSkeleton(fragments, '1B7F') })).toBe(false);
   });
+});
+
+it('W8b empty kept pair sets are complete but still require fresh S9 and S13', () => {
+  const table: any = { schema: 1, basis, active: true, pairs: [] };
+  const args = { edits: table, fragmentCount: 1, clip, selectedCandidates: [[1]], thresholdsFresh: true, energeticsFresh: true, thresholdValidatorFailed: false };
+  expect(thresholdsCompleteForClip(table, 1, clip)).toBe(true);
+  expect(canContinueStage4(args)).toBe(true);
+  expect(canContinueStage4({ ...args, thresholdsFresh: false })).toBe(false);
+  expect(canContinueStage4({ ...args, energeticsFresh: false })).toBe(false);
+  expect(canContinueStage4({ ...args, thresholdValidatorFailed: true })).toBe(false);
 });

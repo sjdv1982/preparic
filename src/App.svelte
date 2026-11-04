@@ -435,6 +435,7 @@ import { canContinueStage4, canEnterStage4, clipForSelectedAnchors, makeThreshol
       fragmentCount,
       clip,
       selectedCandidates,
+      thresholdsFresh: seamlessState.computedFreshness.best_fit_thresholds === true,
       energeticsFresh: seamlessState.computedFreshness.energetics === true,
       thresholdValidatorFailed,
     })) return false;

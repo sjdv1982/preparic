@@ -27,7 +27,7 @@ def marker(name):
     values = {
         "ranges": {"schema": 1, "basis": {"pdbcode": "1B7F", "biounit": 1}, "active": True, "rows": ROWS},
         "stacking_selection": {"schema": 1, "basis": {"pdbcode": "1B7F", "biounit": 1, "rows": ROWS}, "active": False, "selected": {"anchor-A": True}},
-        "threshold_edits": {"schema": 1, "basis": {"pdbcode": "1B7F", "rna": RNA}, "active": True, "pairs": [], "bases": [{"fragment": 1, "sequence": "AC", "nuc1_ovrmsd": None, "nuc2_ovrmsd": None}]},
+        "threshold_edits": {"schema": 1, "basis": {"pdbcode": "1B7F", "rna": RNA}, "active": True, "pairs": []},
         "best_fit_clip": {"schema": 1, "basis": {"pdbcode": "1B7F", "rna": RNA}, "clip1": 0, "clip2": 0},
         "interaction_matrix": {"schema": 1, "basis": ["anchor-A"], "active": False, "rows": ["frag-1-AC"], "ranges": ["range-2"], "grid": [[True]]},
         "gaussian_classes": {"schema": 1, "basis": ["anchor-A"], "active": True, "rows": [{"key": "anchor-A", "rrm": 50}]},
@@ -126,7 +126,6 @@ def test_all_decisions_and_cif_are_file_authoritative_mounts(monkeypatch, tmp_pa
             "energy_thresholds": "computed-energy-thresholds.json",
             "interactions": "interactions.json",
             "gaussian_validation": "gaussian-validation.json",
-            "refe_validation": "refe-validation.json",
         }
         for name, filename in cell_files.items():
             mount = getattr(context, name).mount.spec
@@ -142,7 +141,6 @@ def test_all_decisions_and_cif_are_file_authoritative_mounts(monkeypatch, tmp_pa
             "energetics": context.energetics,
             "interactions": context.interactions,
             "gaussian_validation": context.gaussian_validation,
-            "refe_validation": context.refe_validation,
             "gaussian_scores": context.gaussian_scores,
             "reference_fragment_pdbs": context.reference_fragment_pdbs,
         }
@@ -169,3 +167,13 @@ def test_all_decisions_and_cif_are_file_authoritative_mounts(monkeypatch, tmp_pa
     finally:
         context.close()
         backend.ctx = None
+
+
+def test_legacy_threshold_bases_load_as_undecided_with_preserved_diagnostics(tmp_path):
+    path = tmp_path / "best-fit-threshold-edits.json"
+    raw = json.dumps({**marker("threshold_edits"), "bases": []})
+    path.write_text(raw)
+    value, diagnostics = backend.load_marker_payload(path, "threshold_edits")
+    assert value is None
+    assert diagnostics
+    assert path.read_text() == raw

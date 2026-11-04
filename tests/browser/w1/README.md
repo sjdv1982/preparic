@@ -192,7 +192,7 @@ command above and has not been executed by the author.
 **W1-D4 malformed/baseless decision explanations (P7/P8, I7).** Snapshot the
 exact original file before each injection, using disposable mounts only. While
 the service runs at stage 3 replace `best-fit-threshold-edits.json` with
-`{"schema":1,"active":true,"pairs":[],"bases":[]}` (missing basis). Await
+`{"schema":1,"active":true,"pairs":[]}` (missing basis). Await
 file-authoritative propagation. Both tabs must refuse that marker, remain/fall
 to stage 3 and show an explanation for the next-stage threshold decision. The
 observer captures `decisionErrors` and visible `alerts`; the explanation must
@@ -221,3 +221,11 @@ checking only a settled page cannot prove the read barrier. Stop the disposable
 launcher when done. Leave application files untouched and preserve the initial
 mount copy for comparison. No prepared runbook or successful capability probe
 counts as executed acceptance.
+
+### W8b pairs-only threshold amendment
+
+A stored schema-1 S11 with a `bases` key must load as undecided with retained
+diagnostics. Stage 4 edits pairs only, keeps fragment fit information read-only,
+and waits for fresh S9 at Continue 4→5 even when every pair was typed. Stage 6
+has no reference-anchor panel. Restoring a mounted stage 5/6 decision prefix
+must not wait for S22/S9/S10/S13 after a browser/backend restart.

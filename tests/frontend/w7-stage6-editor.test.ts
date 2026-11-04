@@ -42,7 +42,6 @@ const thresholdMarker = {
   basis: rnaBasis,
   active: true,
   pairs: [],
-  bases: [{ fragment: 1, sequence: 'AC', nuc1_ovrmsd: '1.00', nuc2_ovrmsd: '1.00' }],
 };
 const clip = { schema: 1, basis: rnaBasis, clip1: 0, clip2: 0 };
 
@@ -101,11 +100,6 @@ function setupStage6(options: {
     echo: { classes: classMarker.rows, clip, selected_keys: selectedKeys, best_fits: bestFits.echo },
     rows: [],
   };
-  const referenceValidation = {
-    schema: 1,
-    echo: { bases: thresholdMarker.bases, clip, selected_keys: selectedKeys, best_fits: bestFits.echo },
-    rows: [],
-  };
   const socket = { readyState: 1 };
   const context = {
     self: { sharelist: [] as string[], onsharelist: (_keys: string[]) => undefined, ws: socket as unknown as WebSocket },
@@ -121,7 +115,6 @@ function setupStage6(options: {
     structure_id: new FakeCell('1B7F', 1, true),
     best_fits: new FakeCell(json(bestFits), 1, true),
     gaussian_validation: new FakeCell(json(gaussianValidation), 1, true),
-    refe_validation: new FakeCell(json(referenceValidation), 1, true),
   };
   options.configureContext?.(context);
   const connector = (_updateServer?: string | number | null, _restServer?: string | number | null, namespace?: string) => {
@@ -164,7 +157,6 @@ function stage5GateFixture() {
   const selection = { schema: 1, basis: projectBasis, active: true, selected: { [key]: true } };
   const thresholdEdits = {
     schema: 1, basis: rnaBasis, active: true, pairs: [],
-    bases: [{ fragment: 1, sequence: 'AC', nuc1_ovrmsd: '1.00', nuc2_ovrmsd: '1.00' }],
   };
   const interactionMatrix = {
     schema: 1, basis: selectedKeys, active: true,
@@ -261,7 +253,7 @@ describe('W7 S18 pending writes and validation freshness', () => {
     const { classes } = setupStage6();
     expect(seamlessState.projectStage).toBe(6);
     expect(seamlessState.computedFreshness.gaussian_validation).toBe(true);
-    expect(seamlessState.computedFreshness.refe_validation).toBe(true);
+    expect(seamlessState.computedFreshness).not.toHaveProperty('refe_validation');
 
     const first = { ...classMarker, rows: [{ key, rrm: 90 as const, tilt30: false, disp45: false }] };
     const latest = { ...classMarker, rows: [{ key, rrm: 95 as const, tilt30: true, disp45: true }] };
@@ -361,8 +353,8 @@ describe('W7 S18 pending writes and validation freshness', () => {
     expect(seamlessState.projectStage).toBe(5);
   });
 
-  it('adopts a newer conflicting share and keeps S20 stale on an S11 edit', async () => {
-    const { classes, thresholds } = setupStage6();
+  it('adopts a newer conflicting class share without a reference validation cell', async () => {
+    const { classes } = setupStage6();
     const delayed = { ...classMarker, rows: [{ key, rrm: 95 as const, tilt30: false, disp45: true }] };
     const saved = setProjectDecisionDebounced('gaussian_classes', delayed, 500);
     await vi.advanceTimersByTimeAsync(500);
@@ -375,11 +367,6 @@ describe('W7 S18 pending writes and validation freshness', () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(classes.writes).toHaveLength(1);
 
-    const editedThresholds = structuredClone(thresholdMarker);
-    editedThresholds.bases[0].nuc1_ovrmsd = '1.02';
-    expect(setProjectDecision('threshold_edits', editedThresholds)).toBe(true);
-    expect(seamlessState.computedFreshness.refe_validation).toBe(false);
-    expect(seamlessState.pendingInputs).toContain('threshold_edits');
   });
 });
 
@@ -399,7 +386,8 @@ describe('W7 S9 threshold decision snapshots', () => {
     const copy = cloneThresholdMarker(marker);
     expect(copy).toEqual(thresholdMarker);
     expect(copy).not.toBe(marker);
-    expect(copy.bases).not.toBe(marker.bases);
+    expect(copy.pairs).not.toBe(marker.pairs);
+    expect(copy).not.toHaveProperty('bases');
   });
 });
 
@@ -482,4 +470,12 @@ describe('W7 initial computed-share reads', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(seamlessState.computed.best_fit_thresholds).toEqual(fitThresholds);
   });
+});
+
+it('W8b stage 6 exposes no reference-anchor editor while keeping Gaussian validation', () => {
+  const source = readFileSync(resolve(process.cwd(), 'src/components/Stage6Gaussian.svelte'), 'utf8');
+  expect(source).not.toContain('refe_validation');
+  expect(source).not.toContain('nuc1_ovrmsd');
+  expect(source).not.toContain('nuc2_ovrmsd');
+  expect(source).toContain('gaussian_validation');
 });

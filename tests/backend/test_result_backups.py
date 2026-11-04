@@ -84,9 +84,6 @@ def test_t5_t6_backups_recover_evicted_1b7f_leaves_during_repeated_clips(tmp_pat
         "schema": 1, "basis": basis, "active": True,
         "pairs": [{**row, "ovrmsd": "0.25", "crmsd": "0.25"}
                   for row in fragments["adjacent_pairs"]],
-        "bases": [{"fragment": row["number"], "sequence": row["sequence"],
-                   "nuc1_ovrmsd": "0.25", "nuc2_ovrmsd": "0.25"}
-                  for row in fragments["fragments"]],
     }
     context = Context()
     try:

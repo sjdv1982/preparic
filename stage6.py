@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import math
 import re
-from decimal import Decimal, InvalidOperation
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -13,8 +12,6 @@ from typing import Any
 _FRAGMENT_KEY = re.compile(r"^frag-([1-9][0-9]*)-([ACGU]{2})$")
 _RRM_NAME = re.compile(r"^rrm(50|60|70|80|90|95)(?:-tilt30)?(?:-disp45)?$")
 _REL_TOLERANCE = 1e-12
-_BOUNDARY_TOLERANCE = Decimal("0.00001")
-_L_OV = math.sqrt(3.0)
 _MIN_CELL_FRACTION = 1.0 / 3.0
 
 
@@ -907,91 +904,6 @@ def merge_gaussian_validation(
         "filter_set_version": result["filter_set_version"],
         "filter_names": names,
         "rows": merged_rows,
-    }
-
-
-def validate_refe_anchors(
-    threshold_edits: Any,
-    best_fit_thresholds: Any,
-    fragments: Any,
-    stackings: Any,
-    selection: Any,
-    clip: Any,
-    best_fits: Any,
-) -> dict | None:
-    """T23: compare each kept selected anchor nucleotide with its S11 base cell."""
-    if threshold_edits is None or best_fit_thresholds is None or fragments is None \
-        or stackings is None or selection is None or clip is None or best_fits is None:
-        return None
-    if type(threshold_edits) is not dict or not isinstance(threshold_edits.get("bases"), list):
-        raise ValueError("S11 base threshold edits are malformed.")
-    if type(best_fit_thresholds) is not dict or best_fit_thresholds.get("schema") != 1 \
-        or not isinstance(best_fit_thresholds.get("bases"), list):
-        raise ValueError("A4 reference base thresholds are not ready.")
-    fragment_rows = _fragment_rows(fragments)
-    bounds = _clip_bounds(clip, len(fragment_rows))
-    candidate_rows = _candidate_map(fragments, stackings, selection)
-    edits_by_fragment = {row.get("fragment"): row for row in threshold_edits["bases"] if type(row) is dict}
-    raw_by_fragment = {row.get("fragment"): row for row in best_fit_thresholds["bases"] if type(row) is dict}
-    results = []
-    for candidate in candidate_rows:
-        if not _is_kept(candidate["fragment"], bounds):
-            continue
-        nucleotide_index = 1 if candidate["nucleotide"] == "first" else 2
-        editable_key = f"nuc{nucleotide_index}_ovrmsd"
-        computed_key = f"nuc{nucleotide_index}_ovrmsd"
-        raw_key = f"nuc{nucleotide_index}_ovrmsd_raw"
-        edited = edits_by_fragment.get(candidate["fragment"])
-        computed = raw_by_fragment.get(candidate["fragment"])
-        if edited is None or computed is None:
-            raise ValueError(f"Reference threshold rows are missing for {candidate['fragment_key']}.")
-        if edited.get("sequence") != candidate["sequence"] or computed.get("sequence") != candidate["sequence"]:
-            raise ValueError(f"Reference threshold sequence does not match {candidate['fragment_key']}.")
-        threshold_text = edited.get(editable_key)
-        rounded = computed.get(computed_key)
-        raw_value = computed.get(raw_key)
-        if threshold_text is None:
-            status = "missing"
-            delta = None
-            blocked = False
-        else:
-            try:
-                threshold_decimal = Decimal(str(threshold_text))
-                raw_decimal = Decimal(str(raw_value))
-            except (InvalidOperation, TypeError, ValueError) as exc:
-                raise ValueError(f"Invalid reference ovRMSD value for {candidate['fragment_key']}: {exc}") from exc
-            if not threshold_decimal.is_finite() or not raw_decimal.is_finite():
-                raise ValueError(f"Non-finite reference ovRMSD value for {candidate['fragment_key']}.")
-            blocked = threshold_decimal > Decimal(str(_L_OV))
-            difference = threshold_decimal - raw_decimal
-            delta = float(difference)
-            if blocked:
-                status = "blocked"
-            elif difference >= _BOUNDARY_TOLERANCE:
-                status = "green"
-            elif difference <= -_BOUNDARY_TOLERANCE:
-                status = "red"
-            else:
-                status = "amber"
-        results.append({
-            "key": candidate["key"], "fragment": candidate["fragment"],
-            "fragment_key": candidate["fragment_key"], "sequence": candidate["sequence"],
-            "nucleotide": candidate["nucleotide"], "range": candidate["range"],
-            "protein_resid": candidate["protein_resid"],
-            "computed": rounded, "raw": raw_value, "threshold": threshold_text,
-            "delta": delta, "status": status, "blocked": blocked,
-        })
-    return {
-        "schema": 1,
-        "echo": {
-            "bases": threshold_edits["bases"],
-            "clip": clip,
-            "selected_keys": _selected_keys(selection),
-            "best_fits": best_fits["echo"],
-        },
-        "limit": _L_OV,
-        "boundary_tolerance": float(_BOUNDARY_TOLERANCE),
-        "rows": results,
     }
 
 

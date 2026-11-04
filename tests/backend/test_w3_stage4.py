@@ -44,8 +44,6 @@ def edits(blank=False):
     return {
         "schema": 1, "basis": copy.deepcopy(BASIS), "active": True,
         "pairs": [{**row, "ovrmsd": value, "crmsd": value} for row in fragment_map()["adjacent_pairs"]],
-        "bases": [{"fragment": i + 1, "sequence": seq, "nuc1_ovrmsd": value, "nuc2_ovrmsd": value}
-                  for i, seq in enumerate(SEQUENCES)],
     }
 
 
@@ -100,7 +98,7 @@ def test_t10_accepts_undecided_and_blank_skeleton_before_fit_completes():
 @pytest.mark.parametrize("value", ["0", "-0.1", "0.251", "NaN", "Infinity", "1e-2", 0.25, True])
 def test_t10_rejects_invalid_value_without_rounding(value):
     marker = edits()
-    marker["bases"][0]["nuc1_ovrmsd"] = value
+    marker["pairs"][0]["ovrmsd"] = value
     with pytest.raises(ValueError):
         _validate_threshold_edits(marker, fragment_map())
 
@@ -116,9 +114,9 @@ def test_t10_rejects_boundary_schema_without_partial_use(schema):
         _validate_threshold_edits(marker, fragment_map())
 
 
-def test_t10_refuses_missing_duplicate_or_extra_fragment_rows():
-    for mutation in (lambda m: m["bases"].pop(),
-                     lambda m: m["bases"].append(copy.deepcopy(m["bases"][0])),
+def test_t10_refuses_missing_duplicate_or_extra_pair_rows():
+    for mutation in (lambda m: m["pairs"].pop(),
+                     lambda m: m["pairs"].append(copy.deepcopy(m["pairs"][0])),
                      lambda m: m["pairs"].append({"down": 3, "up": 4, "sequence": "GUA", "ovrmsd": "0.2", "crmsd": "0.2"})):
         marker = edits()
         mutation(marker)
@@ -152,7 +150,6 @@ def test_selected_candidate_groups_preserve_stacking_identity():
 def test_t11_filters_edited_rows_and_keeps_pdb_bytes_and_actual_residues():
     fragments = fragment_map()
     marker = edits()
-    marker["bases"][0]["nuc1_ovrmsd"] = None  # clipped blanks are permitted
     marker["pairs"][0]["crmsd"] = None
     reference = {f"{f['key']}-refe.pdb": f"REFERENCE {f['key']}\r\n".encode() for f in fragments["fragments"]}
     fit_echo = {"pdb_code": "1b7f", "rna": RNA, "resids": fragments["residues"]}
@@ -168,7 +165,13 @@ def test_t11_filters_edited_rows_and_keeps_pdb_bytes_and_actual_residues():
                            "thresholds.json", "clip.json"}
     assert folder["reference/frag-2-CG-refe.pdb"] == reference["frag-2-CG-refe.pdb"]
     assert folder["bestfit/frag-2-CG-bestfit.pdb"] == b"BEST frag-2-CG\n"
-    assert json.loads(folder["thresholds.json"]) == {"schema": 1, "pairs": marker["pairs"][1:], "bases": marker["bases"][1:]}
+    assert json.loads(folder["thresholds.json"]) == {"schema": 1, "pairs": marker["pairs"][1:]}
     assert json.loads(folder["clip.json"]) == {"schema": 1, "clip1": 1, "clip2": 0,
                                                "kept_residues": fragments["residues"][1:]}
     assert (best_fits, reference, marker, clip, fragments) == before
+
+
+def test_t10_refuses_legacy_bases_instead_of_migrating():
+    marker = {**edits(), "bases": []}
+    with pytest.raises(ValueError):
+        _validate_threshold_edits(marker, fragment_map())
