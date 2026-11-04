@@ -606,6 +606,14 @@ import { canContinueStage4, canEnterStage4, clipForSelectedAnchors, makeThreshol
     void viewer.render({ focus, range: selectedRange ?? undefined, alwaysVisible, sidechainRanges, others: appState.otherChainsMode });
   });
 
+  const progressSteps = [
+    { title: 'Structure', subtitle: 'Choose a PDB unit' },
+    { title: 'Ranges', subtitle: 'Select residues' },
+    { title: 'Stackings', subtitle: 'Review interactions' },
+    { title: 'Best fits', subtitle: 'Set thresholds' },
+    { title: 'Interactions', subtitle: 'Review energy matrix' },
+    { title: 'Gaussian', subtitle: 'Validate classes' },
+  ];
 </script>
 
 <svelte:head>
@@ -623,40 +631,18 @@ import { canContinueStage4, canEnterStage4, clipForSelectedAnchors, makeThreshol
     <div class="topbar-right"><span class="phase-pill">PHASE 01</span></div>
   </header>
 
+  <nav class="stage-progress" aria-label="Workflow progress">
+    {#each progressSteps as step, index (step.title)}
+      {#if index > 0}<div class="progress-rail" class:complete={appState.stage >= index + 1}></div>{/if}
+      <div class:current={appState.stage === index + 1} class:complete={appState.stage > index + 1} class="progress-step" aria-current={appState.stage === index + 1 ? 'step' : undefined}>
+        <span class="progress-number">{appState.stage > index + 1 ? '✓' : String(index + 1).padStart(2, '0')}</span>
+        <span><strong>{step.title}</strong><small>{step.subtitle}</small></span>
+      </div>
+    {/each}
+  </nav>
+
   <div class="workspace">
     <aside class="sidebar" inert={!seamlessState.ready || (appState.stage > 1 && appState.stage <= 3 && !appState.structureReady)}>
-      <div class="stage-progress" aria-label="Workflow progress">
-        <div class:current={appState.stage === 1} class:complete={appState.stage > 1} class="progress-step">
-          <span class="progress-number">{appState.stage > 1 ? '✓' : '01'}</span>
-          <span><strong>Structure</strong><small>Choose a PDB unit</small></span>
-        </div>
-        <div class="progress-rail"></div>
-        <div class:current={appState.stage === 2} class:complete={appState.stage > 2} class="progress-step">
-          <span class="progress-number">{appState.stage > 2 ? '✓' : '02'}</span>
-          <span><strong>Ranges</strong><small>Select residues</small></span>
-        </div>
-        <div class="progress-rail"></div>
-        <div class:current={appState.stage === 3} class:complete={appState.stage > 3} class="progress-step">
-          <span class="progress-number">{appState.stage > 3 ? '✓' : '03'}</span>
-          <span><strong>Stackings</strong><small>Review interactions</small></span>
-        </div>
-        <div class="progress-rail"></div>
-        <div class:current={appState.stage === 4} class:complete={appState.stage > 4} class="progress-step">
-          <span class="progress-number">{appState.stage > 4 ? '✓' : '04'}</span>
-          <span><strong>Best fits</strong><small>Set thresholds</small></span>
-        </div>
-        <div class="progress-rail"></div>
-        <div class:current={appState.stage === 5} class:complete={appState.stage > 5} class="progress-step">
-          <span class="progress-number">{appState.stage > 5 ? '✓' : '05'}</span>
-          <span><strong>Interactions</strong><small>Review energy matrix</small></span>
-        </div>
-        <div class="progress-rail"></div>
-        <div class:current={appState.stage === 6} class="progress-step">
-          <span class="progress-number">06</span>
-          <span><strong>Gaussian</strong><small>Validate classes</small></span>
-        </div>
-      </div>
-
       {#if viewerError}
         <div class="viewer-error" role="alert"><strong>Viewer unavailable</strong><span>{viewerError}</span></div>
       {/if}

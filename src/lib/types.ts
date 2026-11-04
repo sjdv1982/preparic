@@ -58,6 +58,8 @@ export interface Stacking {
   rna_resid: number;
   protein_range_pdb_id: number;
   protein_resid: number;
+  /** Absent when the backend predates this field. */
+  protein_resname?: string;
   distance: number;
   tilt_angle: number;
   slip_angle: number;

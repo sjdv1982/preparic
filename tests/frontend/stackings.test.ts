@@ -43,6 +43,10 @@ describe('stacking boundary normalization', () => {
     const later = stacking({ protein_range_pdb_id: 3, protein_resid: 7 });
     const earlier = stacking({ protein_resid: 5 });
     expect(normalizeStackings(JSON.stringify([later, earlier]))).toEqual([earlier, later]);
+    const rnaFirst = stacking({ rna_resid: 4, protein_resid: 90 });
+    const rnaLast = stacking({ rna_resid: 9, protein_resid: 1 });
+    expect(normalizeStackings([rnaLast, rnaFirst])).toEqual([rnaFirst, rnaLast]);
+    expect(normalizeStackings([{ ...rnaFirst, protein_resname: 'TYR' }])).toEqual([{ ...rnaFirst, protein_resname: 'TYR' }]);
     expect(normalizeStackings([])).toEqual([]);
   });
 

@@ -42,6 +42,7 @@ function normalizeStacking(value: unknown): Stacking | null {
     rna_resid,
     protein_range_pdb_id,
     protein_resid,
+    protein_resname,
     distance,
     tilt_angle,
     slip_angle,
@@ -53,6 +54,7 @@ function normalizeStacking(value: unknown): Stacking | null {
   if (typeof rna_resname !== 'string' || rna_resname.trim() === '') return null;
   if (!isInteger(rna_resid) || !isInteger(protein_resid)) return null;
   if (!isInteger(protein_range_pdb_id) || protein_range_pdb_id < 2) return null;
+  if (protein_resname !== undefined && (typeof protein_resname !== 'string' || protein_resname.trim() === '')) return null;
   if (!isFiniteNumber(distance) || distance < 0) return null;
   if (!isFiniteNumber(tilt_angle) || tilt_angle < 0 || tilt_angle > 90) return null;
   if (!isFiniteNumber(slip_angle) || slip_angle < 0 || slip_angle > 90) return null;
@@ -62,6 +64,7 @@ function normalizeStacking(value: unknown): Stacking | null {
     rna_resid,
     protein_range_pdb_id,
     protein_resid,
+    ...(protein_resname !== undefined ? { protein_resname: (protein_resname as string).trim() } : {}),
     distance,
     tilt_angle,
     slip_angle,
@@ -108,10 +111,11 @@ export function stackingKey(stacking: Stacking): string {
   ]);
 }
 
+/** Table order: RNA residue first, then the protein residue it stacks with. */
 function compareStackings(left: Stacking, right: Stacking): number {
-  return left.protein_range_pdb_id - right.protein_range_pdb_id
+  return left.rna_resid - right.rna_resid
+    || left.protein_range_pdb_id - right.protein_range_pdb_id
     || left.protein_resid - right.protein_resid
-    || left.rna_resid - right.rna_resid
     || (left.rna_resname < right.rna_resname ? -1 : left.rna_resname > right.rna_resname ? 1 : 0);
 }
 

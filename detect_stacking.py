@@ -248,6 +248,7 @@ def _detect_stacking(
                         "rna_resid": rna_resid,
                         "protein_range_pdb_id": protein_range_pdb_id,
                         "protein_resid": protein_resid,
+                        "protein_resname": protein_resname,
                         "distance": distance,
                         "tilt_angle": tilt_angle,
                         "slip_angle": slip_angle,

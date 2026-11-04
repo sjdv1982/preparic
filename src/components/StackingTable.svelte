@@ -14,7 +14,7 @@
         <tr>
           <th scope="col">Selection</th>
           <th scope="col">RNA residue</th>
-          <th scope="col">Protein range PDB</th>
+          <th scope="col" class="stacking-range-col" title="Protein range PDB">Range PDB</th>
           <th scope="col">Protein residue</th>
           <th scope="col">Distance</th>
           <th scope="col">Plane tilt</th>
@@ -28,7 +28,7 @@
               <input
                 type="checkbox"
                 checked={appState.stackingSelection[index] ?? false}
-                aria-label={`Select RNA ${stacking.rna_resname} ${stacking.rna_resid} with protein residue ${stacking.protein_resid} in range PDB ${stacking.protein_range_pdb_id}`}
+                aria-label={`Select RNA ${stacking.rna_resname} ${stacking.rna_resid} with protein residue ${stacking.protein_resname ?? ''} ${stacking.protein_resid} in range PDB ${stacking.protein_range_pdb_id}`}
                 onchange={event => {
                   const next = [...appState.stackingSelection];
                   next[index] = event.currentTarget.checked;
@@ -38,8 +38,8 @@
               />
             </td>
             <th scope="row">{stacking.rna_resname} {stacking.rna_resid}</th>
-            <td>{stacking.protein_range_pdb_id}</td>
-            <td>{stacking.protein_resid}</td>
+            <td class="stacking-range-col">{stacking.protein_range_pdb_id}</td>
+            <td>{stacking.protein_resname ? `${stacking.protein_resname} ${stacking.protein_resid}` : stacking.protein_resid}</td>
             <td>{formatStackingNumber(stacking.distance)} Å</td>
             <td>{formatStackingNumber(stacking.tilt_angle)}°</td>
             <td>{formatStackingNumber(stacking.slip_angle)}°</td>
