@@ -34,6 +34,7 @@ from alaric_runtime import (
 )
 from range_pdbs import _pdbs_to_folder, _ranges_to_pdb
 from detect_stacking import _detect_stacking
+from result_backups import mount_result_backup
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -870,6 +871,7 @@ def build_context() -> Context:
         # T6/T24 are independent of the stage-3 selection and of all fit work.
         context.refe_fragments = refe_fragments_transformer(alaric_dir)
         context.refe_fragments.pins.rna_pdb = context.rna_pdb
+        mount_result_backup(context, "refe_fragments_disk_backup", context.refe_fragments.result)
 
         stage4_module = {
             "type": "interpreted",
@@ -927,6 +929,7 @@ def build_context() -> Context:
         context.best_fit.pins.rna_pdb = context.fit_rna_pdb.result
         context.best_fit.pins.exclude_pdb_code = context.exclude_pdb_code
         context.best_fit.pins.fraglib_identities = context.fraglib_identities
+        mount_result_backup(context, "best_fit_disk_backup", context.best_fit.result)
 
         # T7 uses the exact T5 inputs and still runs in the Alaric environment.
         context.best_fit_tables = best_fit_tables_transformer(alaric_dir, fraglib_config)
