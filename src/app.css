@@ -193,23 +193,48 @@ select.cell-editor { padding-right: 4px; }
 .stage-four-content.stage4-embedded { flex: none; overflow: visible; padding: 14px 0; border-top: 1px solid var(--line); }
 .stage4-embedded-title { margin: 0; color: #eff4fb; font-size: 16px; }
 .stage4-embedded .stage-description { margin: 4px 0 0; font-size: 11px; }
-.stage4-embedded .stage4-table-wrap { max-height: min(32vh, 300px); }
 .stage4-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; margin: 15px 0; }
-.stage4-clip-controls, .stage4-copy-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: #7e8da2; font-size: 9px; }
+.stage4-clip-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: #7e8da2; font-size: 9px; }
 .stage4-clip-controls label { display: flex; align-items: center; gap: 5px; }
-.stage4-clip-controls input, .stage4-table input { width: 58px; height: 27px; border: 1px solid #344357; border-radius: 4px; padding: 0 6px; color: #e1e9f3; background: #111c29; font: 500 10px 'DM Mono', monospace; }
-.stage4-table-wrap { max-height: min(48vh, 470px); overflow: auto; border: 1px solid #2a3748; border-radius: 7px; background: #0d1520; }
-.stage4-table { border-collapse: collapse; min-width: 750px; width: 100%; font-size: 9px; }
-.stage4-table th { position: sticky; top: 0; z-index: 1; height: 31px; background: #162131; border-bottom: 1px solid #2a3748; color: #8392a6; text-align: left; font: 500 8px 'DM Mono', monospace; padding: 0 6px; }
-.stage4-table tbody th { position: static; height: 37px; background: transparent; color: #dce5f0; font-size: 9px; }
-.stage4-table td { height: 37px; padding: 4px 6px; border-bottom: 1px solid rgba(151, 171, 199, .08); color: #bdc9d8; font: 400 8px 'DM Mono', monospace; white-space: nowrap; }
-.stage4-table tr.clipped { opacity: .45; }
-.stage4-table input { width: 62px; }
-.stage4-diff { color: #f0bc66; margin-left: 4px; font-size: 8px; }
+.stage4-clip-controls input { width: 58px; height: 27px; border: 1px solid #344357; border-radius: 4px; padding: 0 6px; color: #e1e9f3; background: #111c29; font: 500 10px 'DM Mono', monospace; }
+.stage4-threshold-status { color: #8090a5; font-size: 9px; }
+.stage4-active-picker { margin: 4px 0 15px; padding: 13px 14px 10px; border: 1px solid #2a3b50; border-radius: 8px; background: linear-gradient(135deg, rgba(23, 39, 58, .9), rgba(15, 25, 38, .94)); }
+.stage4-active-picker-heading { display: grid; grid-template-columns: minmax(100px, 1fr) auto minmax(150px, .8fr); align-items: center; gap: 12px; }
+.stage4-active-picker-heading > div { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+.stage4-kicker { color: #8192a8; font: 500 8px 'DM Mono', monospace; letter-spacing: .08em; text-transform: uppercase; }
+.stage4-active-picker-heading strong { color: #e8edf4; font: 600 18px 'DM Mono', monospace; }
+.stage4-active-picker-heading > div > span:nth-of-type(2) { color: #b3c2d4; font: 500 10px 'DM Mono', monospace; }
+.stage4-clipped-note { align-self: center; padding: 3px 6px; border: 1px solid rgba(240, 188, 102, .28); border-radius: 999px; color: #f0bc66; background: rgba(240, 188, 102, .08); font: 500 8px 'DM Mono', monospace; letter-spacing: .04em; text-transform: uppercase; }
+.stage4-active-picker-heading > label { color: #8595a9; font-size: 9px; }
+.stage4-active-picker-heading .select-input { min-height: 34px; font-size: 10px; }
+.stage4-active-slider { display: block; width: 100%; height: 17px; margin: 11px 0 0; accent-color: #86b7f5; cursor: pointer; }
+.stage4-slider-ends { display: flex; justify-content: space-between; color: #65768c; font: 400 8px 'DM Mono', monospace; }
+.stage4-fit-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; margin-bottom: 14px; }
+.stage4-fit-card { min-width: 0; overflow: hidden; border: 1px solid #2a394c; border-top: 2px solid var(--fit-color); border-radius: 8px; background: #111b28; }
+.stage4-fit-card > header { min-width: 0; display: grid; grid-template-columns: 8px auto minmax(0, 1fr); align-items: center; gap: 7px; padding: 10px 11px; border-bottom: 1px solid rgba(151, 171, 199, .09); color: #9baabd; font-size: 9px; }
+.stage4-fit-card > header strong { overflow: hidden; color: #dce5f0; font: 500 9px 'DM Mono', monospace; text-align: right; text-overflow: ellipsis; }
+.stage4-fit-swatch { width: 8px; height: 8px; border-radius: 50%; background: var(--fit-color); box-shadow: 0 0 10px color-mix(in srgb, var(--fit-color), transparent 35%); }
+.stage4-fit-card-body { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 8px 14px; padding: 10px 11px 11px; }
+.stage4-fit-sequence { color: var(--fit-color); font: 600 15px 'DM Mono', monospace; letter-spacing: .08em; }
+.stage4-fit-rmsd { display: flex; align-items: baseline; justify-content: space-between; gap: 7px; color: #7f8ea2; font-size: 9px; }
+.stage4-fit-rmsd strong { color: #edf3fa; font: 600 12px 'DM Mono', monospace; white-space: nowrap; }
+.stage4-fit-residues { grid-column: 1 / -1; color: #75859a; font: 400 8px 'DM Mono', monospace; }
+.stage4-overlap-card { padding: 14px; border: 1px solid #2b3c52; border-radius: 8px; background: rgba(13, 22, 33, .82); }
+.stage4-overlap-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.stage4-overlap-header h2 { margin: 4px 0 0; color: #e7eef7; font: 600 12px 'DM Mono', monospace; }
+.stage4-overlap-header .button { min-height: 33px; padding: 0 10px; white-space: nowrap; font-size: 9px; }
+.stage4-overlap-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin: 13px 0; }
+.stage4-overlap-values > div { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 9px 10px; border-radius: 6px; background: #131f2e; }
+.stage4-overlap-values span { color: #8292a7; font-size: 9px; }
+.stage4-overlap-values strong { color: #dce7f5; font: 500 11px 'DM Mono', monospace; white-space: nowrap; }
+.stage4-threshold-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.stage4-threshold-fields label { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: #bbc8d8; font-size: 9px; }
+.stage4-threshold-fields label > span:first-of-type { color: #63758c; }
+.stage4-threshold-fields input { width: 86px; height: 31px; margin-left: auto; padding: 0 8px; border: 1px solid #364a62; border-radius: 5px; outline: 0; color: #eff5fc; background: #0b1420; font: 500 11px 'DM Mono', monospace; }
+.stage4-threshold-fields input:focus { border-color: #76a9e8; box-shadow: 0 0 0 2px rgba(91, 149, 221, .15); }
+.stage4-threshold-fields small { flex-basis: 100%; text-align: right; }
+.stage4-diff { color: #f0bc66; font-size: 8px; }
 .stage4-warning { display: block; color: #ed9b6c; font: 500 7px 'DM Sans', sans-serif; }
-.stage4-revert { margin-left: 3px; padding: 2px 4px; border: 0; border-radius: 3px; color: #8fa0b6; background: transparent; cursor: pointer; }
-.stage4-revert:hover:not(:disabled) { color: #d6e4f5; background: #253449; }
-.stage4-revert:disabled { color: #394759; cursor: not-allowed; }
 .stage4-pending, .stage4-gate { padding: 8px 10px; border-radius: 5px; color: #9db1c8; background: rgba(65, 109, 163, .12); font-size: 9px; }
 .stage4-error { padding: 8px 10px; border: 1px solid rgba(214, 95, 88, .25); border-radius: 5px; color: #f0aaa5; background: rgba(183, 71, 69, .1); font-size: 9px; }
 .sr-only { width: 1px; height: 1px; overflow: hidden; position: absolute; clip: rect(0, 0, 0, 0); white-space: nowrap; }
@@ -300,6 +325,11 @@ select.cell-editor { padding-right: 4px; }
   .stage-progress { padding-left: 16px; padding-right: 16px; }
   .stage-content { padding-left: 22px; padding-right: 22px; }
   .topbar-center { display: none; }
+  .stage4-active-picker-heading { grid-template-columns: minmax(0, 1fr); gap: 7px; }
+  .stage4-active-picker-heading > label { display: none; }
+  .stage4-threshold-fields { grid-template-columns: minmax(0, 1fr); }
+  .stage4-overlap-header { align-items: stretch; flex-direction: column; }
+  .stage4-overlap-header .button { width: 100%; }
   .stage6-heading { align-items: flex-start; flex-direction: column; }
   .stage6-toolbar { flex-wrap: wrap; }
 }

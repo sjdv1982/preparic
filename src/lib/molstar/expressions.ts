@@ -55,3 +55,13 @@ export function unionExpression(expressions: Expression[]): Expression {
 export function complementExpression(expression: Expression): Expression {
   return MS.struct.modifier.exceptBy({ 0: MS.struct.generator.all(), by: expression });
 }
+
+/** Select one residue in a prepared PDB using its original author numbering. */
+export function residueAddressExpression(resid: number, insertionCode: string): Expression {
+  return MS.struct.generator.atomGroups({
+    'residue-test': MS.core.logic.and([
+      MS.core.rel.eq([MS.struct.atomProperty.macromolecular.auth_seq_id(), resid]),
+      MS.core.rel.eq([MS.struct.atomProperty.macromolecular.pdbx_PDB_ins_code(), insertionCode]),
+    ]),
+  });
+}

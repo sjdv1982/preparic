@@ -56,6 +56,78 @@ function isRecord(value: unknown): value is UnknownRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+export interface ActiveDinucleotidePair {
+  key: string;
+  residue: FragmentIdentity;
+  pre: FragmentRow;
+  post: FragmentRow;
+  down: number;
+  up: number;
+  sequence: string;
+  clipped: boolean;
+}
+
+export function fragmentIdentityKey(residue: FragmentIdentity): string {
+  return JSON.stringify([residue.chain, residue.resid, residue.insertion_code, residue.base]);
+}
+
+export function isFragmentIdentity(value: unknown): value is FragmentIdentity {
+  return isRecord(value)
+    && typeof value.chain === 'string'
+    && Number.isSafeInteger(value.resid)
+    && typeof value.insertion_code === 'string'
+    && ['A', 'C', 'G', 'U'].includes(String(value.base));
+}
+
+function sameFragmentIdentity(left: FragmentIdentity, right: FragmentIdentity): boolean {
+  return left.chain === right.chain && left.resid === right.resid
+    && left.insertion_code === right.insertion_code && left.base === right.base;
+}
+
+/** Map adjacent fragment pairs to their shared nucleotide and mark pairs outside the clip. */
+export function activeDinucleotidePairs(inventory: unknown, clip?: unknown): ActiveDinucleotidePair[] {
+  if (!isRecord(inventory) || inventory.schema !== 1
+    || !Array.isArray(inventory.fragments) || !Array.isArray(inventory.adjacent_pairs)) return [];
+
+  const fragmentCount = inventory.fragments.length;
+  const effectiveClip = clip == null ? undefined : validClip(clip, fragmentCount) ? clip : null;
+  if (effectiveClip === null) return [];
+
+  const fragments = new Map<number, FragmentRow>();
+  for (const value of inventory.fragments) {
+    if (!isRecord(value) || !Number.isSafeInteger(value.number)
+      || typeof value.key !== 'string' || typeof value.sequence !== 'string'
+      || !Array.isArray(value.residues) || value.residues.length !== 2
+      || !isFragmentIdentity(value.residues[0]) || !isFragmentIdentity(value.residues[1])) continue;
+    fragments.set(Number(value.number), value as unknown as FragmentRow);
+  }
+
+  const result: ActiveDinucleotidePair[] = [];
+  for (const value of inventory.adjacent_pairs) {
+    if (!isRecord(value) || !Number.isSafeInteger(value.down) || !Number.isSafeInteger(value.up)
+      || value.up !== Number(value.down) + 1 || typeof value.sequence !== 'string') continue;
+    const down = Number(value.down);
+    const up = Number(value.up);
+    const clipped = effectiveClip !== undefined
+      && (down <= effectiveClip.clip1 || up > fragmentCount - effectiveClip.clip2);
+    const pre = fragments.get(down);
+    const post = fragments.get(up);
+    if (!pre || !post || !sameFragmentIdentity(pre.residues[1], post.residues[0])) continue;
+    const residue = pre.residues[1];
+    result.push({
+      key: fragmentIdentityKey(residue),
+      residue,
+      pre,
+      post,
+      down,
+      up,
+      sequence: value.sequence,
+      clipped,
+    });
+  }
+  return result;
+}
+
 function sameAddress(left: unknown, right: unknown): boolean {
   if (!isRecord(left) || !isRecord(right)) return false;
   return left.chain === right.chain && left.start === right.start && left.end === right.end;

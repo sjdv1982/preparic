@@ -13,6 +13,7 @@ import {
   type ProjectStage,
 } from './project-state';
 import type { RangeRow, Stacking } from './types';
+import { isFragmentIdentity, type FragmentIdentity } from './stage4';
 
 export type SharedValue = string | Blob | null | undefined;
 type DecisionKey = 'ranges' | 'stacking_selection' | 'threshold_edits' | 'best_fit_clip' | 'interaction_matrix' | 'gaussian_classes';
@@ -22,7 +23,7 @@ type ShareKey = 'pdbcode' | 'biounit' | 'ranges' | 'range_specs' | 'stackings' |
   | 'structure_id' | 'range_pdbs_aa' | 'fragments' | 'best_fit_thresholds' | 'best_fits' | 'energetics'
   | 'reference_fragment_pdbs'
   | 'energy_thresholds' | 'interactions' | 'bestfit_stackings' | 'gaussian_validation'
-  | 'gaussian_scores';
+  | 'gaussian_scores' | 'stage4_active_nucleotide';
 
 export interface SharedCell {
   value: SharedValue;
@@ -75,6 +76,7 @@ export interface ShareContext {
   bestfit_stackings?: SharedCell;
   gaussian_validation?: SharedCell;
   gaussian_scores?: SharedCell;
+  stage4_active_nucleotide?: SharedCell;
   'cif.cif'?: SharedCell;
 }
 
@@ -161,6 +163,8 @@ export const seamlessState = $state({
   pdbCode: '',
   biounitIndex: 1,
   energyThresholdEdits: null as unknown,
+  /** S26: the stage-4 active nucleotide this tab shows (shared view state, not a decision). */
+  stage4ActiveNucleotide: null as FragmentIdentity | null,
   pdbCodePendingWrite: false,
   biounitIndexPendingWrite: false,
   rangesReady: false,
@@ -575,6 +579,121 @@ export function cancelQueuedProjectDecision(key: DebouncedDecisionKey): void {
   cancelDebouncedProjectDecision(key);
 }
 
+// S26 `stage4_active_nucleotide`: shared view state for collaborative viewing
+// in stage 4 only. It is not a decision: it has no marker, basis, pending-input
+// or sync notice, and a conflict is adopted silently (contract-boundaries §8.2).
+const STAGE4_ACTIVE_NUCLEOTIDE_DEBOUNCE_MS = 300;
+interface ActiveNucleotideIntent {
+  serialized: string;
+  connectionAtIssue: number;
+  markerAtIssue: number | undefined;
+  timer: ReturnType<typeof setTimeout> | undefined;
+}
+let activeNucleotideIntent: ActiveNucleotideIntent | undefined;
+let activeNucleotideWritten: string | undefined;
+
+function parseActiveNucleotide(value: SharedValue): FragmentIdentity | null {
+  const parsed = parseJsonValue(value);
+  if (!isFragmentIdentity(parsed)) return null;
+  return { chain: parsed.chain, resid: parsed.resid, insertion_code: parsed.insertion_code, base: parsed.base };
+}
+
+function serializeActiveNucleotide(value: FragmentIdentity | null): string {
+  return JSON.stringify(value === null ? null : {
+    chain: value.chain, resid: value.resid, insertion_code: value.insertion_code, base: value.base,
+  });
+}
+
+function cancelActiveNucleotideIntent(): void {
+  if (activeNucleotideIntent?.timer !== undefined) clearTimeout(activeNucleotideIntent.timer);
+  activeNucleotideIntent = undefined;
+}
+
+function adoptSharedActiveNucleotide(): void {
+  seamlessState.stage4ActiveNucleotide = parseActiveNucleotide(client?.stage4_active_nucleotide?.value);
+}
+
+function receiveActiveNucleotide(value: SharedValue): void {
+  const parsed = parseActiveNucleotide(value);
+  const serialized = serializeActiveNucleotide(parsed);
+  if (activeNucleotideWritten !== undefined && serialized === activeNucleotideWritten) {
+    // The echo of this tab's own write. A newer local choice that is still
+    // debounced stays shown, and is now based on the acknowledged marker.
+    activeNucleotideWritten = undefined;
+    if (activeNucleotideIntent) {
+      activeNucleotideIntent.markerAtIssue = client?.stage4_active_nucleotide?.marker;
+      return;
+    }
+  } else {
+    // A remote write, a 409 adoption or an authoritative reread: the last
+    // accepted write wins, and a queued local choice is dropped (§4.1).
+    activeNucleotideWritten = undefined;
+    cancelActiveNucleotideIntent();
+  }
+  seamlessState.stage4ActiveNucleotide = parsed;
+}
+
+function flushActiveNucleotideIntent(intent: ActiveNucleotideIntent): void {
+  if (activeNucleotideIntent !== intent) return;
+  activeNucleotideIntent = undefined;
+  const cell = client?.stage4_active_nucleotide;
+  const current = !!cell && !cell.readonly && seamlessState.ready && seamlessState.status === 'live'
+    && seamlessState.projectStage === 4 && structureConnectionRevision === intent.connectionAtIssue
+    && cell.marker === intent.markerAtIssue;
+  if (!current) {
+    adoptSharedActiveNucleotide();
+    return;
+  }
+  let accepted = false;
+  activeNucleotideWritten = intent.serialized;
+  try { accepted = cell.set(intent.serialized); } catch { accepted = false; }
+  if (!accepted) {
+    activeNucleotideWritten = undefined;
+    adoptSharedActiveNucleotide();
+  }
+}
+
+/** Choose the stage-4 active nucleotide: shown at once, shared after a short debounce. */
+export function setStage4ActiveNucleotide(value: FragmentIdentity): boolean {
+  const cell = client?.stage4_active_nucleotide;
+  if (!cell || cell.readonly || !isFragmentIdentity(value) || !seamlessState.ready
+    || seamlessState.status !== 'live' || seamlessState.projectStage !== 4) return false;
+  const serialized = serializeActiveNucleotide(value);
+  seamlessState.stage4ActiveNucleotide = parseActiveNucleotide(serialized);
+  const intent = activeNucleotideIntent ?? {
+    serialized,
+    connectionAtIssue: structureConnectionRevision,
+    markerAtIssue: cell.marker,
+    timer: undefined,
+  };
+  if (intent.timer !== undefined) clearTimeout(intent.timer);
+  intent.serialized = serialized;
+  activeNucleotideIntent = intent;
+  if (activeNucleotideWritten === undefined
+    && serializeActiveNucleotide(parseActiveNucleotide(cell.value)) === serialized) {
+    cancelActiveNucleotideIntent();
+    return true;
+  }
+  intent.timer = setTimeout(() => flushActiveNucleotideIntent(intent), STAGE4_ACTIVE_NUCLEOTIDE_DEBOUNCE_MS);
+  return true;
+}
+
+/**
+ * Reset S26 to null. Called by the tab making any of the four transitions into
+ * or out of stage 4, before its first write of that transition, and not awaited.
+ */
+export function resetStage4ActiveNucleotide(): void {
+  cancelActiveNucleotideIntent();
+  seamlessState.stage4ActiveNucleotide = null;
+  const cell = client?.stage4_active_nucleotide;
+  if (!cell || cell.readonly) return;
+  if (activeNucleotideWritten === undefined && parseActiveNucleotide(cell.value) === null) return;
+  activeNucleotideWritten = 'null';
+  let accepted = false;
+  try { accepted = cell.set('null'); } catch { accepted = false; }
+  if (!accepted) activeNucleotideWritten = undefined;
+}
+
 function refreshVisibleErrors(): void {
   seamlessState.stateGraphErrors = visibleTransformerErrors({
     stage: seamlessState.projectStage,
@@ -622,6 +741,7 @@ function suspendForDisconnect(): void {
   seamlessState.ready = false;
   seamlessState.status = 'disconnected';
   cancelStaleDebouncedProjectDecisions();
+  cancelActiveNucleotideIntent();
   seamlessState.computedFreshness = {};
   seamlessState.structureIdReady = false;
   seamlessState.hasInitialStateGraph = false;
@@ -1236,6 +1356,9 @@ function attachShare(key: ShareKey, keys: string[], allowUrlFallback = false): v
     case 'gaussian_scores':
       install(value => receiveComputed(key, value));
       break;
+    case 'stage4_active_nucleotide':
+      install(receiveActiveNucleotide);
+      break;
   }
 }
 
@@ -1297,7 +1420,7 @@ async function resynchronizeShares(keys: string[]): Promise<void> {
     'best_fit_clip', 'interaction_matrix', 'gaussian_classes', 'energy_threshold_edits',
     'range_specs', 'structure_id', 'range_pdbs_aa', 'stackings', 'fragments', 'reference_fragment_pdbs',
     'best_fit_thresholds', 'best_fits', 'energetics', 'energy_thresholds', 'interactions',
-    'bestfit_stackings', 'gaussian_validation', 'gaussian_scores',
+    'bestfit_stackings', 'gaussian_validation', 'gaussian_scores', 'stage4_active_nucleotide',
   ];
   const tasks = ordered.filter(key => hasListedShare(key, keys)).map(readShareFresh);
   if (pendingStructureCommit && keys.includes('cif.cif')) tasks.push(readPendingCifFresh());
@@ -1392,7 +1515,7 @@ function attachShareContext(context: ShareContext): void {
       'threshold_edits', 'best_fit_clip', 'interaction_matrix', 'gaussian_classes', 'energy_threshold_edits',
       'range_specs', 'structure_id', 'range_pdbs_aa', 'fragments', 'reference_fragment_pdbs', 'best_fit_thresholds', 'best_fits',
       'energetics', 'energy_thresholds', 'interactions', 'bestfit_stackings', 'gaussian_validation',
-      'gaussian_scores',
+      'gaussian_scores', 'stage4_active_nucleotide',
     ] as const) attachShare(key, keys, initialShareList);
     const cifCell = context['cif.cif'];
     if (cifCell) cifCell.onchange = value => { if (!resyncInProgress) receiveCifCommit(value); };
@@ -1435,6 +1558,9 @@ export function connectToSeamless(connect: ShareConnector): void {
   seamlessState.computedFreshness = {};
   seamlessState.decisionErrors = {};
   seamlessState.energyThresholdEdits = null;
+  cancelActiveNucleotideIntent();
+  activeNucleotideWritten = undefined;
+  seamlessState.stage4ActiveNucleotide = null;
   seamlessState.rangeError = '';
   seamlessState.stackingSelectionError = '';
   seamlessState.stackingSelectionReady = false;

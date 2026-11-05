@@ -17,7 +17,7 @@ import { PluginStateObject as SO } from 'molstar/lib/mol-plugin-state/objects.js
 import { ShapeRepresentation3D } from 'molstar/lib/mol-plugin-state/transforms/representation.js';
 import { StateSelection } from 'molstar/lib/mol-state/index.js';
 import type { ResidueIndex } from 'molstar/lib/mol-model/structure/model/indexing.js';
-import { chainExpression, complementExpression, rangeExpression, sidechainRangeExpression, unionExpression } from './expressions';
+import { chainExpression, complementExpression, rangeExpression, residueAddressExpression, sidechainRangeExpression, unionExpression } from './expressions';
 import { stackingDashSegments, type DashSegment } from './stacking-geometry';
 import { nameChains, type ChainUnitInput } from '../chains';
 import { uniqueStackingParticipantRanges } from '../stackings';
@@ -39,8 +39,20 @@ interface PreparedPdbSource {
   trajectoryRef: any;
   modelRef: any;
   structureRef: any;
-  componentRef: any;
-  representationRef: any;
+  componentRefs: any[];
+  representationRefs: any[];
+}
+
+export interface PreparedPdbOverlay {
+  label: string;
+  pdb: string;
+  color: number;
+}
+
+export interface PreparedPdbDisplayOptions {
+  activeResidue?: { resid: number; insertion_code: string };
+  stackings?: readonly StackingViewerInput[];
+  resetCamera?: boolean;
 }
 function createStackingConnectorShapeTransformer() {
   return StateTransformer.builderFactory('preparic')({
@@ -260,8 +272,9 @@ export class MolViewer {
   /** Load backend-prepared range PDB text without changing its atom records. */
   showPreparedPdbs(
     ranges: readonly { range: string; pdb: string }[],
-    overlays: readonly { label: string; pdb: string }[] = [],
+    overlays: readonly PreparedPdbOverlay[] = [],
     isCurrent: () => boolean = () => true,
+    options: PreparedPdbDisplayOptions = {},
   ): Promise<void> {
     const token = ++this.loadToken;
     this.downloadedCif = null;
@@ -279,7 +292,10 @@ export class MolViewer {
             || typeof item.pdb !== 'string' || !item.pdb.length) {
             throw new Error('A prepared range PDB is missing its range address or text.');
           }
-          const source = await this.stagePreparedPdb(item.pdb, `Prepared ${item.range}`, token, isCurrent);
+          const source = await this.stagePreparedPdb(item.pdb, `Prepared ${item.range}`, token, isCurrent, {
+            transparent: true,
+            activeResidue: item.range === 'range-1' ? options.activeResidue : undefined,
+          });
           if (!source) {
             await this.discardPreparedPdbs(staged);
             return;
@@ -288,7 +304,7 @@ export class MolViewer {
         }
         for (const item of overlays) {
           if (typeof item.pdb !== 'string' || !item.pdb.length) continue;
-          const source = await this.stagePreparedPdb(item.pdb, item.label, token, isCurrent);
+          const source = await this.stagePreparedPdb(item.pdb, item.label, token, isCurrent, { color: item.color });
           if (!source) {
             await this.discardPreparedPdbs(staged);
             return;
@@ -316,12 +332,14 @@ export class MolViewer {
           state.updateCellState(ref, { isHidden: true });
         }
         for (const source of oldPreparedPdbs) {
-          if (source.representationRef) {
-            state.updateCellState(source.representationRef.ref, { isHidden: true });
+          for (const representation of source.representationRefs) {
+            state.updateCellState(representation.ref, { isHidden: true });
           }
         }
         for (const source of staged) {
-          state.updateCellState(source.representationRef.ref, { isHidden: false });
+          for (const representation of source.representationRefs) {
+            state.updateCellState(representation.ref, { isHidden: false });
+          }
         }
         // The readiness check and all visibility updates above run in the
         // same JavaScript turn. No async state commit can apply after a
@@ -348,7 +366,8 @@ export class MolViewer {
           await this.deleteStructureSource(oldRetiredSource);
         }
         if (staged.length > 0 && token === this.loadToken && isCurrent()) {
-          this.plugin.managers.camera.reset();
+          if (options.resetCamera !== false) this.plugin.managers.camera.reset();
+          await this.renderStackingConnectors(options.stackings ?? [], () => token === this.loadToken && isCurrent());
         }
       } catch (error) {
         if (!activated) await this.discardPreparedPdbs(staged);
@@ -365,6 +384,7 @@ export class MolViewer {
     label: string,
     token: number,
     isCurrent: () => boolean,
+    display: { transparent?: boolean; activeResidue?: { resid: number; insertion_code: string }; color?: number } = {},
   ): Promise<PreparedPdbSource | null> {
     const staged: PreparedPdbSource = {
       label,
@@ -372,8 +392,8 @@ export class MolViewer {
       trajectoryRef: null,
       modelRef: null,
       structureRef: null,
-      componentRef: null,
-      representationRef: null,
+      componentRefs: [],
+      representationRefs: [],
     };
     const current = () => token === this.loadToken && isCurrent();
     try {
@@ -397,21 +417,82 @@ export class MolViewer {
         await this.discardPreparedPdbSource(staged);
         return null;
       }
-      const component = await this.plugin.builders.structure.tryCreateComponentStatic(
-        staged.structureRef,
-        'all',
-        { label, tags: [PREPARED_PDB_TAG] },
-      );
-      if (!component || !current()) {
-        await this.discardPreparedPdbSource(staged);
-        return null;
+      const addRepresentation = async (component: any, params: Record<string, any>) => {
+        const representation = await this.plugin.builders.structure.representation.addRepresentation(component, params, {
+          tag: PREPARED_PDB_TAG,
+          initialState: { isHidden: true },
+        });
+        staged.representationRefs.push(representation);
+      };
+      if (display.color !== undefined) {
+        const component = await this.plugin.builders.structure.tryCreateComponentStatic(
+          staged.structureRef,
+          'all',
+          { label, tags: [PREPARED_PDB_TAG] },
+        );
+        if (component) staged.componentRefs.push(component);
+        if (!component || !current()) {
+          await this.discardPreparedPdbSource(staged);
+          return null;
+        }
+        await addRepresentation(component, {
+          type: 'ball-and-stick',
+          color: 'uniform',
+          colorParams: { value: Color(display.color) },
+          typeParams: { visuals: ['intra-bond'] },
+        });
+      } else {
+        let backgroundComponent: any;
+        let activeComponent: any;
+        if (display.activeResidue) {
+          const activeExpression = residueAddressExpression(display.activeResidue.resid, display.activeResidue.insertion_code);
+          backgroundComponent = await this.plugin.builders.structure.tryCreateComponentFromExpression(
+            staged.structureRef,
+            complementExpression(activeExpression),
+            'stage4-range-background',
+            { label: `${label} background`, tags: [PREPARED_PDB_TAG] },
+          );
+          activeComponent = await this.plugin.builders.structure.tryCreateComponentFromExpression(
+            staged.structureRef,
+            activeExpression,
+            'stage4-active-nucleotide',
+            { label: 'Active RNA nucleotide', tags: [PREPARED_PDB_TAG] },
+          );
+          if (backgroundComponent) staged.componentRefs.push(backgroundComponent);
+          if (activeComponent) staged.componentRefs.push(activeComponent);
+        } else {
+          backgroundComponent = await this.plugin.builders.structure.tryCreateComponentStatic(
+            staged.structureRef,
+            'all',
+            { label, tags: [PREPARED_PDB_TAG] },
+          );
+          if (backgroundComponent) staged.componentRefs.push(backgroundComponent);
+        }
+        if (!backgroundComponent && !activeComponent) {
+          await this.discardPreparedPdbSource(staged);
+          return null;
+        }
+        if (backgroundComponent) {
+          const alpha = display.transparent ? 0.2 : 1;
+          await addRepresentation(backgroundComponent, {
+            type: 'cartoon',
+            color: 'element-symbol',
+            typeParams: { alpha },
+          });
+          await addRepresentation(backgroundComponent, {
+            type: 'ball-and-stick',
+            color: 'element-symbol',
+            typeParams: { alpha, visuals: ['intra-bond'] },
+          });
+        }
+        if (activeComponent) {
+          await addRepresentation(activeComponent, {
+            type: 'ball-and-stick',
+            color: 'element-symbol',
+            typeParams: { visuals: ['intra-bond'] },
+          });
+        }
       }
-      staged.componentRef = component;
-      staged.representationRef = await this.plugin.builders.structure.representation.addRepresentation(component, {
-        type: 'ball-and-stick',
-        color: 'element-symbol',
-        typeParams: { visuals: ['intra-bond'] },
-      }, { tag: PREPARED_PDB_TAG, initialState: { isHidden: true } });
       if (!current()) {
         await this.discardPreparedPdbSource(staged);
         return null;
@@ -426,8 +507,8 @@ export class MolViewer {
 
   private async discardPreparedPdbSource(source: PreparedPdbSource): Promise<void> {
     await this.deleteStateRefs([
-      source.representationRef,
-      source.componentRef,
+      ...source.representationRefs,
+      ...source.componentRefs,
       source.structureRef,
       source.modelRef,
       source.trajectoryRef,
@@ -438,8 +519,8 @@ export class MolViewer {
   private async discardPreparedPdbs(sources: PreparedPdbSource[]): Promise<void> {
     if (sources.length === 0) return;
     await this.deleteStateRefs(sources.flatMap(source => [
-      source.representationRef,
-      source.componentRef,
+      ...source.representationRefs,
+      ...source.componentRefs,
       source.structureRef,
       source.modelRef,
       source.trajectoryRef,
@@ -886,11 +967,20 @@ export class MolViewer {
     }
 
     if (token !== this.renderToken) return;
+    await this.renderStackingConnectors(stackings, () => token === this.renderToken);
+  }
+
+  private async renderStackingConnectors(
+    stackings: readonly StackingViewerInput[],
+    isCurrent: () => boolean,
+  ): Promise<void> {
+    if (stackings.length === 0 || !isCurrent()) return;
     const segments = stackings.flatMap(stacking => stackingDashSegments(
       stacking.rnaCentroid,
       stacking.proteinCentroid,
     ));
     if (segments.length === 0) return;
+    if (!isCurrent()) return;
     await this.plugin.state.data.build()
       .toRoot()
       .apply(getStackingConnectorShapeTransformer(), { segments }, { tags: [RENDER_TAG] })

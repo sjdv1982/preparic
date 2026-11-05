@@ -18,7 +18,6 @@ export interface AppState {
   stackings: Stacking[];
   stackingSelection: boolean[];
   staleStackingRevision: number | null;
-  stage4OverlayFragments: number[];
   /** Stacking rows whose residues are hovered in the Mol* viewer. */
   viewerHoveredStackings: number[];
   /** Stacking row hovered in the table. */
@@ -42,7 +41,6 @@ export const appState = $state<AppState>({
   stackings: [],
   stackingSelection: [],
   staleStackingRevision: null,
-  stage4OverlayFragments: [],
   viewerHoveredStackings: [],
   tableHoveredStacking: null,
 });

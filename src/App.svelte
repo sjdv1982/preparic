@@ -7,11 +7,11 @@
   import Stage6Gaussian from './components/Stage6Gaussian.svelte';
   import Viewer from './components/Viewer.svelte';
   import { clearStructureDependentState, enterStage2, enterStage3, appState, invalidateStackingState, returnToStage1, returnToStage2 } from './lib/state.svelte';
-  import { cancelSharedCifWrite, deactivateProjectDecisionAndWait, prepareProjectTransition, seamlessState, setEnergyThresholdEditsAwaited, setProjectDecisionAwaited, setSharedBiounitIndex, setSharedCif, setSharedPdbCode, setSharedRangeRows, setSharedStackingSelectionAndWait, waitForShareWrite } from './lib/seamless.svelte';
+  import { cancelSharedCifWrite, deactivateProjectDecisionAndWait, prepareProjectTransition, resetStage4ActiveNucleotide, seamlessState, setEnergyThresholdEditsAwaited, setProjectDecisionAwaited, setSharedBiounitIndex, setSharedCif, setSharedPdbCode, setSharedRangeRows, setSharedStackingSelectionAndWait, waitForShareWrite } from './lib/seamless.svelte';
   import { findChain } from './lib/chains';
   import { cloneRangeRows, updateRow, validateRows } from './lib/ranges';
   import { mergeStackings, observeStage2RangeRows, resolveSelectedStackings, resolveStackingParticipants, stackingRowsAtResidue } from './lib/stackings';
-import { canContinueStage4, canEnterStage4, clipForSelectedAnchors, makeThresholdSkeleton, selectedCandidateGroups, validClipForCandidates, validateThresholdEdits } from './lib/stage4';
+import { activeDinucleotidePairs, canContinueStage4, fragmentIdentityKey, canEnterStage4, clipForSelectedAnchors, makeThresholdSkeleton, selectedCandidateGroups, validClipForCandidates, validateThresholdEdits } from './lib/stage4';
   import { adaptInteractionMatrix, candidateAnchors, makeInteractionMatrix, recomputeInteractionMatrix, reconcileEnergyThresholdEdits, stage5CanAdvance, stage5Rows, type Stage5S14 } from './lib/stage5';
   import { markerIsWellFormed } from './lib/project-state';
   import { classMarkerForContinue, selectedGaussianKeys } from './lib/stage6';
@@ -21,6 +21,8 @@ import { canContinueStage4, canEnterStage4, clipForSelectedAnchors, makeThreshol
   const startupQuery = new URLSearchParams(window.location.search);
   const startupPdbId = startupQuery.get('pdb');
   const startupAutoContinue = startupQuery.get('continue') === '1';
+  const stage4PreColor = 0xe879f9;
+  const stage4PostColor = 0x2dd4bf;
   let startupPdbIdForRestore = $state<string | null>(null);
 
   const decisionErrorStage: Record<string, number> = {
@@ -115,6 +117,7 @@ import { canContinueStage4, canEnterStage4, clipForSelectedAnchors, makeThreshol
   let preparedViewerKey = '';
   let preparedViewerActive = false;
   let preparedViewerReady = $state(false);
+  let preparedViewerHasLoaded = false;
 
   function handleViewerReady(created: MolViewer) {
     viewer = created;
@@ -330,6 +333,7 @@ import { canContinueStage4, canEnterStage4, clipForSelectedAnchors, makeThreshol
   }
 
   async function backToStackings(): Promise<boolean> {
+    resetStage4ActiveNucleotide();
     if (!await deactivateProjectDecisionAndWait('threshold_edits')) {
       seamlessState.syncNotice = 'The threshold decision could not be deactivated. Review the shared project and try again.';
       return false;
@@ -361,6 +365,7 @@ import { canContinueStage4, canEnterStage4, clipForSelectedAnchors, makeThreshol
       seamlessState.stackingSelectionError = 'The canonical fragment list is not ready.';
       return;
     }
+    resetStage4ActiveNucleotide();
     if (!await prepareProjectTransition(4)) {
       seamlessState.stackingSelectionError = 'Later-stage decisions could not be deactivated before opening stage 4.';
       return;
@@ -449,6 +454,7 @@ import { canContinueStage4, canEnterStage4, clipForSelectedAnchors, makeThreshol
       rangeRows,
     );
     if (!reconciled) return false;
+    resetStage4ActiveNucleotide();
     if (JSON.stringify(seamlessState.energyThresholdEdits) !== JSON.stringify(reconciled)
       && !await setEnergyThresholdEditsAwaited(reconciled)) return false;
 
@@ -474,6 +480,7 @@ import { canContinueStage4, canEnterStage4, clipForSelectedAnchors, makeThreshol
   }
 
   async function backToStage4(): Promise<boolean> {
+    resetStage4ActiveNucleotide();
     return await deactivateProjectDecisionAndWait('interaction_matrix');
   }
 
@@ -532,6 +539,7 @@ import { canContinueStage4, canEnterStage4, clipForSelectedAnchors, makeThreshol
       if (seamlessState.computedFreshness.range_pdbs_aa !== true || !share
         || share.schema !== 1 || !Array.isArray(share.pdbs)) {
         preparedViewerReady = false;
+        preparedViewerHasLoaded = false;
         if (preparedViewerKey !== 'pending') {
           preparedViewerKey = 'pending';
           void viewer.clearPreparedPdbs();
@@ -539,36 +547,48 @@ import { canContinueStage4, canEnterStage4, clipForSelectedAnchors, makeThreshol
         return;
       }
       const inventory = seamlessState.computed.fragments as any;
-      const referencePdbs = seamlessState.computed.reference_fragment_pdbs as any;
       const fits = seamlessState.computed.best_fits as any;
-      const overlayNumbers = appState.stage === 4 ? appState.stage4OverlayFragments : [];
-      const fragments = Array.isArray(inventory?.fragments)
-        ? overlayNumbers.map(number => inventory.fragments.find((item: any) => item.number === number))
-          .filter((item: any) => item && typeof item.key === 'string')
-        : [];
-      const overlays: { label: string; pdb: string }[] = [];
-      for (const fragment of fragments) {
-        if (seamlessState.computedFreshness.reference_fragment_pdbs === true) {
-          const reference = referencePdbs?.rows?.find((item: any) => item.key === fragment.key)?.pdb;
-          if (typeof reference === 'string') overlays.push({ label: `Reference ${fragment.key}`, pdb: reference });
-        }
-        if (seamlessState.computedFreshness.best_fits === true) {
+      const availableActivePairs = activeDinucleotidePairs(inventory, seamlessState.projectSnapshot.best_fit_clip);
+      const sharedActive = seamlessState.stage4ActiveNucleotide;
+      const activeKey = sharedActive ? fragmentIdentityKey(sharedActive) : null;
+      const activePair = appState.stage === 4
+        ? availableActivePairs.find(item => item.key === activeKey) ?? availableActivePairs[0]
+        : undefined;
+      const overlays: { label: string; pdb: string; color: number }[] = [];
+      if (activePair && seamlessState.computedFreshness.best_fits === true) {
+        for (const [fragment, color, position] of [
+          [activePair.pre, stage4PreColor, 'Pre'],
+          [activePair.post, stage4PostColor, 'Post'],
+        ] as const) {
           const bestfit = fits?.rows?.find((item: any) => item.key === fragment.key)?.pdb;
-          if (typeof bestfit === 'string') overlays.push({ label: `Best fit ${fragment.key}`, pdb: bestfit });
+          if (typeof bestfit === 'string') overlays.push({ label: `${position} best fit ${fragment.key}`, pdb: bestfit, color });
         }
       }
+      const selectedStackings = appState.stage === 4 && seamlessState.computedFreshness.stackings === true
+        ? resolveSelectedStackings(appState.stackings, appState.stackingSelection, appState.rows, appState.chains)
+        : [];
+      const activeResidue = activePair
+        ? { resid: activePair.residue.resid, insertion_code: activePair.residue.insertion_code }
+        : undefined;
       const loadKey = JSON.stringify([
         seamlessState.pdbCode.toLowerCase(), share.range_specs,
         share.pdbs.map((item: any) => [item.range, item.name, item.pdb]),
-        overlayNumbers, overlays,
+        activePair?.key ?? null, overlays, selectedStackings,
       ]);
       if (loadKey === preparedViewerKey) return;
       preparedViewerKey = loadKey;
       preparedViewerReady = false;
       viewer.setGranularity('residue');
       const isCurrentTarget = () => seamlessState.ready && appState.stage >= 4 && preparedViewerKey === loadKey;
-      void viewer.showPreparedPdbs(share.pdbs, overlays, isCurrentTarget).then(() => {
-        if (isCurrentTarget()) preparedViewerReady = true;
+      void viewer.showPreparedPdbs(share.pdbs, overlays, isCurrentTarget, {
+        activeResidue,
+        stackings: selectedStackings,
+        resetCamera: !preparedViewerHasLoaded,
+      }).then(() => {
+        if (isCurrentTarget()) {
+          preparedViewerReady = true;
+          preparedViewerHasLoaded = true;
+        }
       }).catch(error => {
         if (preparedViewerKey !== loadKey) return;
         preparedViewerReady = false;
@@ -580,6 +600,7 @@ import { canContinueStage4, canEnterStage4, clipForSelectedAnchors, makeThreshol
       preparedViewerActive = false;
       preparedViewerKey = '';
       preparedViewerReady = false;
+      preparedViewerHasLoaded = false;
       void viewer.restoreLastVisibleView().then(() => {
         if (appState.stage === 3 && seamlessState.computedFreshness.stackings) {
           const selectedStackings = resolveSelectedStackings(
@@ -646,7 +667,7 @@ import { canContinueStage4, canEnterStage4, clipForSelectedAnchors, makeThreshol
     { title: 'Structure', subtitle: 'Choose a PDB unit' },
     { title: 'Ranges', subtitle: 'Select residues' },
     { title: 'Stackings', subtitle: 'Review interactions' },
-    { title: 'Best fits', subtitle: 'Set thresholds' },
+    { title: 'Best fits', subtitle: 'Compare fragments' },
     { title: 'Interactions', subtitle: 'Review energy matrix' },
     { title: 'Gaussian', subtitle: 'Validate classes' },
   ];
@@ -721,7 +742,7 @@ import { canContinueStage4, canEnterStage4, clipForSelectedAnchors, makeThreshol
     <section class="viewer-pane" aria-label="Molecular viewer workspace" inert={!seamlessState.ready}>
       <div class="viewer-toolbar">
         <div class="viewer-title"><span class="viewer-title-icon">◈</span><span>{appState.pdbId || 'Structure viewer'}</span>{#if appState.structureReady}<span class="loaded-badge">LOADED</span>{/if}</div>
-        <div class="viewer-toolbar-right"><span class="viewer-mode"><span>●</span> {appState.stage >= 4 ? 'Prepared range view' : appState.stage === 1 ? 'Structure view' : appState.stage === 2 ? 'Pick mode' : 'Interaction review'}</span><span class="toolbar-divider"></span><span class="viewer-version">Mol*</span></div>
+        <div class="viewer-toolbar-right"><span class="viewer-mode"><span>●</span> {appState.stage === 4 ? 'Dinucleotide fit comparison' : appState.stage >= 4 ? 'Prepared range view' : appState.stage === 1 ? 'Structure view' : appState.stage === 2 ? 'Pick mode' : 'Interaction review'}</span><span class="toolbar-divider"></span><span class="viewer-version">Mol*</span></div>
       </div>
       <div class="viewer-stage">
         <Viewer onReady={handleViewerReady} onError={(message) => viewerError = message} onPick={handlePick} onHover={handleViewerHover} chainName={hover => findChain(appState.chains, hover.labelAsymId, hover.instanceId)?.name ?? hover.labelAsymId} />
