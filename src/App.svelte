@@ -7,12 +7,12 @@
   import Stage6Gaussian from './components/Stage6Gaussian.svelte';
   import Viewer from './components/Viewer.svelte';
   import { clearStructureDependentState, enterStage2, enterStage3, appState, invalidateStackingState, returnToStage1, returnToStage2 } from './lib/state.svelte';
-  import { cancelSharedCifWrite, deactivateProjectDecisionAndWait, prepareProjectTransition, resetStage4ActiveNucleotide, seamlessState, setEnergyThresholdEditsAwaited, setProjectDecisionAwaited, setSharedBiounitIndex, setSharedCif, setSharedPdbCode, setSharedRangeRows, setSharedStackingSelectionAndWait, waitForShareWrite } from './lib/seamless.svelte';
+  import { cancelSharedCifWrite, deactivateProjectDecisionAndWait, prepareProjectTransition, readSharedCif, resetStage4ActiveNucleotide, seamlessState, setEnergyThresholdEditsAwaited, setProjectDecisionAwaited, setSharedBiounitIndex, setSharedCif, setSharedPdbCode, setSharedRangeRows, setSharedStackingSelectionAndWait, waitForShareWrite } from './lib/seamless.svelte';
   import { findChain } from './lib/chains';
   import { cloneRangeRows, updateRow, validateRows } from './lib/ranges';
   import { mergeStackings, observeStage2RangeRows, resolveSelectedStackings, resolveStackingParticipants, stackingRowsAtResidue } from './lib/stackings';
 import { activeDinucleotidePairs, canContinueStage4, fragmentIdentityKey, canEnterStage4, clipForSelectedAnchors, makeThresholdSkeleton, selectedCandidateGroups, validClipForCandidates, validateThresholdEdits } from './lib/stage4';
-  import { adaptInteractionMatrix, candidateAnchors, makeInteractionMatrix, recomputeInteractionMatrix, reconcileEnergyThresholdEdits, stage5CanAdvance, stage5Rows, type Stage5S14 } from './lib/stage5';
+  import { adaptInteractionMatrix, candidateAnchors, makeInteractionMatrix, recomputeInteractionMatrix, reconcileEnergyThresholdEdits, stage5CanAdvance, stage5RangePalette, stage5Rows, type Stage5S14 } from './lib/stage5';
   import { markerIsWellFormed } from './lib/project-state';
   import { classMarkerForContinue, selectedGaussianKeys } from './lib/stage6';
   import type { ChainKey, HoverInfo, PickInfo, RangeRow, RangeSpec } from './lib/types';
@@ -118,6 +118,12 @@ import { activeDinucleotidePairs, canContinueStage4, fragmentIdentityKey, canEnt
   let preparedViewerActive = false;
   let preparedViewerReady = $state(false);
   let preparedViewerHasLoaded = false;
+  let stage5ViewerMode = $state(false);
+  let stage5ViewerRestoring = $state(false);
+  let stage5DisabledRangeIds = $state<string[]>([]);
+  let stage5TableHoveredFragment = $state<number | null>(null);
+  let stage5ViewerHoveredFragmentNumbers = $state<number[]>([]);
+  let stage5ViewerHoveredRange = $state<RangeSpec | null>(null);
 
   function handleViewerReady(created: MolViewer) {
     viewer = created;
@@ -143,6 +149,27 @@ import { activeDinucleotidePairs, canContinueStage4, fragmentIdentityKey, canEnt
   }
 
   function handleViewerHover(hover: HoverInfo | null) {
+    if (appState.stage === 5) {
+      const rnaRange = rangeForRow(appState.rows[0]);
+      const inventory = seamlessState.computed.fragments as any;
+      const fragmentCount = Array.isArray(inventory?.fragments) ? inventory.fragments.length : 0;
+      const inRna = !!hover && !!rnaRange
+        && hover.labelAsymId === rnaRange.labelAsymId
+        && hover.instanceId === rnaRange.instanceId
+        && hover.labelSeqId >= rnaRange.start && hover.labelSeqId <= rnaRange.end;
+      const offset = inRna && rnaRange ? hover!.labelSeqId - rnaRange.start : -1;
+      const fragmentNumbers = inRna
+        ? [offset, offset + 1].filter(number => number >= 1 && number <= fragmentCount)
+        : [];
+      if (fragmentNumbers.length !== stage5ViewerHoveredFragmentNumbers.length
+        || fragmentNumbers.some((number, index) => number !== stage5ViewerHoveredFragmentNumbers[index])) {
+        stage5ViewerHoveredFragmentNumbers = fragmentNumbers;
+      }
+      stage5ViewerHoveredRange = inRna && rnaRange
+        ? { ...rnaRange, start: hover!.labelSeqId, end: hover!.labelSeqId }
+        : null;
+      return;
+    }
     const rows = hover && appState.stage === 3
       ? stackingRowsAtResidue(resolveStackingParticipants(appState.stackings, appState.rows, appState.chains), hover)
         .filter(row => appState.stackingSelection[row] === true)
@@ -151,6 +178,50 @@ import { activeDinucleotidePairs, canContinueStage4, fragmentIdentityKey, canEnt
     if (rows.length !== current.length || rows.some((row, index) => row !== current[index])) {
       appState.viewerHoveredStackings = rows;
     }
+  }
+
+  function handleStage5TableHover(number: number | null): void {
+    stage5TableHoveredFragment = number;
+  }
+
+  function stage5FragmentRange(number: number): RangeSpec | null {
+    const rnaRange = rangeForRow(appState.rows[0]);
+    const inventory = seamlessState.computed.fragments as any;
+    const fragmentCount = Array.isArray(inventory?.fragments) ? inventory.fragments.length : 0;
+    if (!rnaRange || !Number.isSafeInteger(number) || number < 1 || number > fragmentCount) return null;
+    return {
+      ...rnaRange,
+      start: rnaRange.start + number - 1,
+      end: rnaRange.start + number,
+    };
+  }
+
+  function setStage5RangeVisibility(disabledRangeIds: string[]): void {
+    stage5DisabledRangeIds = disabledRangeIds;
+  }
+
+  async function restoreStage5Assembly(current: () => boolean): Promise<void> {
+    if (!viewer) return;
+    await viewer.restoreLastVisibleView();
+    if (!current()) return;
+    let chains = viewer.listChains();
+    if (chains.length === 0) {
+      const assemblies = await viewer.loadCif(await readSharedCif(), seamlessState.pdbCode, current);
+      if (!assemblies?.length || !current()) throw new Error('The shared structure could not be restored for stage 5.');
+      const savedAssembly = assemblies.find(item => item.id === appState.assemblyId);
+      const requestedIndex = Number.isSafeInteger(appState.biounitIndex)
+        && appState.biounitIndex >= 1 && appState.biounitIndex <= assemblies.length
+        ? appState.biounitIndex : 1;
+      const assembly = savedAssembly ?? assemblies[requestedIndex - 1];
+      if (!assembly) throw new Error('No biological unit or polymer chain was found for stage 5.');
+      await viewer.showStagedAssembly(assembly.id, current, current);
+      if (!current()) return;
+      appState.assemblies = assemblies;
+      appState.assemblyId = assembly.id;
+      chains = viewer.listChains();
+    }
+    appState.chains = chains;
+    appState.structureReady = chains.length > 0;
   }
 
   let tableHighlightActive = false;
@@ -168,6 +239,30 @@ import { activeDinucleotidePairs, canContinueStage4, fragmentIdentityKey, canEnt
       viewer.highlightRanges([]);
       tableHighlightActive = false;
     }
+  });
+
+  let stage5HighlightActive = false;
+  $effect(() => {
+    if (!viewer) return;
+    if (appState.stage !== 5) {
+      if (stage5HighlightActive) viewer.highlightRanges([]);
+      stage5HighlightActive = false;
+      return;
+    }
+    const tableRange = stage5TableHoveredFragment === null
+      ? null : stage5FragmentRange(stage5TableHoveredFragment);
+    const ranges = tableRange ? [tableRange]
+      : stage5ViewerHoveredRange ? [stage5ViewerHoveredRange] : [];
+    viewer.highlightRanges(ranges);
+    stage5HighlightActive = ranges.length > 0;
+  });
+
+  $effect(() => {
+    if (appState.stage === 5) return;
+    stage5DisabledRangeIds = [];
+    stage5TableHoveredFragment = null;
+    stage5ViewerHoveredFragmentNumbers = [];
+    stage5ViewerHoveredRange = null;
   });
 
   $effect(() => {
@@ -528,6 +623,81 @@ import { activeDinucleotidePairs, canContinueStage4, fragmentIdentityKey, canEnt
 
   $effect(() => {
     if (!viewer) return;
+    if (appState.stage === 5) {
+      if (!seamlessState.ready) return;
+      if (!stage5ViewerMode) {
+        stage5ViewerMode = true;
+        stage5ViewerRestoring = true;
+        preparedViewerActive = false;
+        preparedViewerKey = 'stage5:restoring';
+        preparedViewerReady = false;
+        viewer.setGranularity('residue');
+        const isCurrentRestore = () => appState.stage === 5 && stage5ViewerMode;
+        void restoreStage5Assembly(isCurrentRestore).then(() => {
+          if (isCurrentRestore()) {
+            stage5ViewerRestoring = false;
+            preparedViewerKey = '';
+          }
+        }).catch(error => {
+          stage5ViewerRestoring = false;
+          viewerError = error instanceof Error ? error.message : String(error);
+        });
+        return;
+      }
+      if (stage5ViewerRestoring) return;
+
+      const proteinRanges = appState.rows.slice(1).flatMap((row, index) => {
+        const range = rangeForRow(row);
+        if (!range) return [];
+        const rangeId = `range-${index + 2}`;
+        const color = stage5RangePalette[index % stage5RangePalette.length];
+        return [{ range, color: color.molstar, transparent: stage5DisabledRangeIds.includes(rangeId) }];
+      });
+      const rnaRange = rangeForRow(appState.rows[0]);
+      const clip = seamlessState.projectSnapshot.best_fit_clip as any;
+      const fragmentCount = Array.isArray((seamlessState.computed.fragments as any)?.fragments)
+        ? (seamlessState.computed.fragments as any).fragments.length : 0;
+      const clippedRnaRanges: RangeSpec[] = [];
+      if (rnaRange && clip && Number.isSafeInteger(clip.clip1) && Number.isSafeInteger(clip.clip2)) {
+        if (clip.clip1 > 0) clippedRnaRanges.push({
+          ...rnaRange,
+          start: rnaRange.start,
+          end: Math.min(rnaRange.end, rnaRange.start + clip.clip1 - 1),
+        });
+        if (clip.clip2 > 0) clippedRnaRanges.push({
+          ...rnaRange,
+          start: Math.max(rnaRange.start, rnaRange.end - clip.clip2 + 1),
+          end: rnaRange.end,
+        });
+      }
+      const selectedStackings = seamlessState.computedFreshness.stackings === true
+        ? resolveSelectedStackings(appState.stackings, appState.stackingSelection, appState.rows, appState.chains)
+        : [];
+      const loadKey = JSON.stringify([
+        'stage5', seamlessState.pdbCode.toLowerCase(), appState.assemblyId,
+        proteinRanges, clippedRnaRanges, selectedStackings, fragmentCount,
+      ]);
+      if (loadKey === preparedViewerKey) return;
+      preparedViewerKey = loadKey;
+      preparedViewerReady = false;
+      const isCurrentTarget = () => appState.stage === 5 && stage5ViewerMode && preparedViewerKey === loadKey;
+      void viewer.render({
+        focus: null,
+        stage5ProteinRanges: proteinRanges,
+        stage5TransparentRanges: clippedRnaRanges,
+        stackings: selectedStackings,
+      }).then(() => {
+        if (isCurrentTarget()) preparedViewerReady = true;
+      }).catch(error => {
+        if (preparedViewerKey !== loadKey) return;
+        viewerError = error instanceof Error ? error.message : String(error);
+      });
+      return;
+    }
+    if (stage5ViewerMode) {
+      stage5ViewerMode = false;
+      stage5ViewerRestoring = false;
+    }
     if (appState.stage >= 4 && !seamlessState.ready) {
       preparedViewerActive = true;
       return;
@@ -725,7 +895,9 @@ import { activeDinucleotidePairs, canContinueStage4, fragmentIdentityKey, canEnt
       {:else if appState.stage === 4}
         <Stage4BestFits onBack={backToStackings} onContinue={continueToStage5} />
       {:else if appState.stage === 5}
-        <Stage5Energetics onBack={backToStage4} onContinue={continueToStage6} />
+        <Stage5Energetics onBack={backToStage4} onContinue={continueToStage6}
+          disabledRangeIds={stage5DisabledRangeIds} hoveredFragmentNumbers={stage5ViewerHoveredFragmentNumbers}
+          onRangeVisibilityChange={setStage5RangeVisibility} onHoverFragment={handleStage5TableHover} />
       {:else if appState.stage === 6}
         <Stage6Gaussian onBack={backToStage5} />
       {:else}
@@ -742,11 +914,11 @@ import { activeDinucleotidePairs, canContinueStage4, fragmentIdentityKey, canEnt
     <section class="viewer-pane" aria-label="Molecular viewer workspace" inert={!seamlessState.ready}>
       <div class="viewer-toolbar">
         <div class="viewer-title"><span class="viewer-title-icon">◈</span><span>{appState.pdbId || 'Structure viewer'}</span>{#if appState.structureReady}<span class="loaded-badge">LOADED</span>{/if}</div>
-        <div class="viewer-toolbar-right"><span class="viewer-mode"><span>●</span> {appState.stage === 4 ? 'Dinucleotide fit comparison' : appState.stage >= 4 ? 'Prepared range view' : appState.stage === 1 ? 'Structure view' : appState.stage === 2 ? 'Pick mode' : 'Interaction review'}</span><span class="toolbar-divider"></span><span class="viewer-version">Mol*</span></div>
+        <div class="viewer-toolbar-right"><span class="viewer-mode"><span>●</span> {appState.stage === 4 ? 'Dinucleotide fit comparison' : appState.stage === 5 ? 'ATTRACT range review' : appState.stage >= 4 ? 'Prepared range view' : appState.stage === 1 ? 'Structure view' : appState.stage === 2 ? 'Pick mode' : 'Interaction review'}</span><span class="toolbar-divider"></span><span class="viewer-version">Mol*</span></div>
       </div>
       <div class="viewer-stage">
         <Viewer onReady={handleViewerReady} onError={(message) => viewerError = message} onPick={handlePick} onHover={handleViewerHover} chainName={hover => findChain(appState.chains, hover.labelAsymId, hover.instanceId)?.name ?? hover.labelAsymId} />
-        {#if seamlessState.ready && appState.stage >= 4 && seamlessState.computedFreshness.range_pdbs_aa !== true}
+        {#if seamlessState.ready && appState.stage >= 4 && appState.stage !== 5 && seamlessState.computedFreshness.range_pdbs_aa !== true}
           <div class="viewer-empty"><strong>Preparing all-atom structure…</strong><span>Waiting for fresh prepared range PDBs.</span></div>
         {:else if seamlessState.ready && appState.stage < 4 && !appState.structureReady}
           <div class="viewer-empty" class:viewer-empty-loading={appState.loading}>
@@ -758,7 +930,7 @@ import { activeDinucleotidePairs, canContinueStage4, fragmentIdentityKey, canEnt
             <span>{appState.loading ? 'Downloading coordinates and assembling the selected unit.' : 'Enter a PDB code to begin exploring.'}</span>
           </div>
         {/if}
-        <div class="viewer-corner-label"><span>{appState.stage >= 4 ? 'PREPARED PDBs' : 'RCSB PDB'}</span><span class="corner-separator">/</span><span>Mol*</span></div>
+        <div class="viewer-corner-label"><span>{appState.stage === 5 ? 'ASSEMBLY VIEW' : appState.stage >= 4 ? 'PREPARED PDBs' : 'RCSB PDB'}</span><span class="corner-separator">/</span><span>Mol*</span></div>
       </div>
       <div class="viewer-footer">
         <div class="viewer-footer-left"><span class="footer-live-dot"></span>{(appState.stage >= 4 ? preparedViewerReady : appState.structureReady) ? `Ready${appState.pdbId ? ` · ${appState.pdbId}` : ''}` : 'Awaiting structure'}</div>

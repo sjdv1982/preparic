@@ -1,5 +1,4 @@
 <script lang="ts">
-  import Stage4BestFits from './Stage4BestFits.svelte';
   import { seamlessState, setEnergyThresholdEdits, setProjectDecisionAwaited } from '../lib/seamless.svelte';
   import {
     candidateAnchors,
@@ -10,6 +9,7 @@
     stage5RangeIds,
     stage5Rows,
     setStage5UntilNextAnchor,
+    stage5RangePalette,
     toggleStage5MatrixCell,
     untilNextAnchorState,
     validateStage5InteractionMatrix,
@@ -19,11 +19,26 @@
     type Stage5Range,
   } from '../lib/stage5';
 
-  let { onBack, onContinue }: { onBack: () => Promise<boolean>; onContinue: () => Promise<boolean> } = $props();
+  let {
+    onBack,
+    onContinue,
+    disabledRangeIds = [],
+    hoveredFragmentNumbers = [],
+    onRangeVisibilityChange,
+    onHoverFragment,
+  }: {
+    onBack: () => Promise<boolean>;
+    onContinue: () => Promise<boolean>;
+    disabledRangeIds?: string[];
+    hoveredFragmentNumbers?: number[];
+    onRangeVisibilityChange?: (ids: string[]) => void;
+    onHoverFragment?: (number: number | null) => void;
+  } = $props();
   let matrixDraft = $state<Stage5S14 | null>(null);
   let energyEdits = $state<Stage5S24 | null>(null);
   let message = $state('');
   let matrixBusy = $state(false);
+  let locallyHoveredFragment = $state<number | null>(null);
 
   const isRecord = (value: unknown): value is Record<string, any> =>
     value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -43,6 +58,12 @@
   let rangeMarker = $derived(seamlessState.projectSnapshot.ranges);
   let rangeRows = $derived(isRecord(rangeMarker) && Array.isArray(rangeMarker.rows) ? rangeMarker.rows : []);
   let matrixRanges = $derived(stage5RangeIds(rangeRows) ?? []);
+  let displayRanges = $derived(rangeRows.slice(1).map((row: any, index: number) => ({
+    row,
+    index,
+    rangeId: `range-${index + 2}`,
+    color: stage5RangePalette[index % stage5RangePalette.length],
+  })).filter((item: any) => !disabledRangeIds.includes(item.rangeId)));
   let matrixStructureMatches = $derived(!!matrixDraft
     && JSON.stringify(matrixDraft.ranges) === JSON.stringify(matrixRanges));
   let clip = $derived(seamlessState.projectSnapshot.best_fit_clip);
@@ -184,8 +205,20 @@
   function energyColor(value: unknown): string {
     if (typeof value !== 'number' || !Number.isFinite(value)) return 'transparent';
     const capped = Math.max(-20, Math.min(20, value));
-    const position = (capped + 20) * 2.5;
+    const position = (20 - capped) * 2.5;
     return `linear-gradient(90deg, #324761 ${position}%, #142337 ${position}%)`;
+  }
+
+  function setRangeDisabled(rangeId: string, disabled: boolean): void {
+    const next = disabled
+      ? [...new Set([...disabledRangeIds, rangeId])]
+      : disabledRangeIds.filter(item => item !== rangeId);
+    onRangeVisibilityChange?.(next);
+  }
+
+  function hoverFragment(number: number | null): void {
+    locallyHoveredFragment = number;
+    onHoverFragment?.(number);
   }
 
   function isKept(key: string): boolean { return !!rows?.includes(key); }
@@ -264,41 +297,93 @@
 
 <section class="stage-content stage-five-content">
   <div class="eyebrow">Stage 05 <span>Energetics and interactions</span></div>
-  <h1>Review energies and interactions</h1>
-  <p class="stage-description">Energetics cover every reference and best-fit fragment for each protein range. Clipped rows remain visible.</p>
-
-  <Stage4BestFits embedded={true} {onBack} {onContinue} />
+  <h1>ATTRACT scores and interactions</h1>
+  <p class="stage-description">Negative ATTRACT scores are better. Clipped fragments stay visible; their interactions remain unavailable.</p>
 
   <div class="stage5-toolbar">
     <button class="button button-secondary" disabled={!thresholdsFresh} onclick={copyThresholds}>Copy computed thresholds</button>
     <span>{thresholdsFresh ? `${diffCount} edited cells differ from computed values` : 'Computed thresholds are updating.'}</span>
+    <button class="button button-secondary" onclick={recompute} disabled={matrixBusy}>Recompute matrix</button>
   </div>
   {#if !energeticsFresh}
     <p class="stage5-status" role="status">Waiting for current gridless energetics. Best-fit changes score every range; a single range edit rescores that range.</p>
   {/if}
 
+  <section class="stage5-range-visibility" aria-label="Protein range visibility">
+    <strong>Protein ranges</strong>
+    {#each rangeRows.slice(1) as proteinRange, rangeIndex (`${proteinRange.chain}:${proteinRange.start}-${proteinRange.end}`)}
+      {@const rangeId = `range-${rangeIndex + 2}`}
+      {@const color = stage5RangePalette[rangeIndex % stage5RangePalette.length]}
+      <label class="stage5-range-toggle"><input type="checkbox" checked={!disabledRangeIds.includes(rangeId)}
+        aria-label={`Show ${rangeId}, chain ${proteinRange.chain} ${proteinRange.start} to ${proteinRange.end}`}
+        onchange={event => setRangeDisabled(rangeId, !event.currentTarget.checked)} />
+        <span class="stage5-range-swatch" style={`background:${color.css}`}></span>
+        Range {rangeIndex + 2} · {proteinRange.chain} {proteinRange.start}–{proteinRange.end}
+      </label>
+    {/each}
+  </section>
+  <p class="stage5-matrix-note">Interaction columns sit with each protein range. Recompute grows out from anchor locks while either absolute ATTRACT score reaches 3; clips and scoring errors stop growth.</p>
+  {#if matrixError}<p class="stage5-error" role="alert">{matrixError}. Recompute when current energetics are ready.</p>{/if}
+  {#if !anchors}<p class="stage5-error" role="alert">Selected anchors could not be mapped to the kept fragment rows.</p>{/if}
   <div class="stage5-energy-wrap">
-    <table class="stage5-energy-table" aria-label="Fragment energies and editable thresholds by protein range">
-      <thead><tr><th>Fragment</th>{#each rangeRows.slice(1) as proteinRange, rangeIndex (`${proteinRange.chain}:${proteinRange.start}-${proteinRange.end}`)}
-        <th colspan="3">Range {rangeIndex + 2} · chain {proteinRange.chain} {proteinRange.start}–{proteinRange.end}</th>
-      {/each}</tr><tr><th>Reference / best fit energy, threshold</th>{#each rangeRows.slice(1) as _range, rangeIndex (`r-${rangeIndex}`)}<th>Reference</th><th>Best fit</th><th>Threshold</th>{/each}</tr></thead>
+    <table class="stage5-energy-table" aria-label="ATTRACT scores, thresholds, and interaction matrix by protein range">
+      <thead>
+        <tr><th scope="col" rowspan="2">Fragment</th>{#each displayRanges as item (item.rangeId)}
+          {@const anchorsInRange = selectedAnchors.map((anchor, anchorIndex) => ({ anchor, anchorIndex }))
+            .filter(entry => entry.anchor.range === item.rangeId)}
+          <th scope="colgroup" colspan="4" class="stage5-range-heading" style={`background:${item.color.css};color:#0b111b`}>
+            <strong>Range {item.index + 2} · chain {item.row.chain} {item.row.start}–{item.row.end}</strong>
+            {#if anchorsInRange.length === 0}<small>No selected anchor locks</small>{/if}
+            {#each anchorsInRange as entry, anchorPosition (`${entry.anchor.resid}:${entry.anchorIndex}`)}
+              {@const anchor = entry.anchor}
+              {@const join = matrixDraft && anchors ? untilNextAnchorState(matrixDraft, entry.anchorIndex, anchors) : null}
+              <div class="stage5-anchor-locks">
+                <small>Anchor {anchor.resid}: {anchor.locks.map(lock => `${lock.fragment} (nt ${lock.nucleotide})`).join(', ')}</small>
+                {#if anchorPosition + 1 < anchorsInRange.length}
+                  {@const nextAnchor = anchorsInRange[anchorPosition + 1].anchor}
+                  <label class="stage5-until-next"><input type="checkbox"
+                    aria-label={`Join anchor ${anchor.resid} to anchor ${nextAnchor.resid} in ${item.rangeId}`}
+                    checked={join?.joined || join?.forced || false}
+                    disabled={!matrixDraft || !matrixStructureMatches || !matrixUsable || !canEdit || matrixBusy || !!join?.forced}
+                    onchange={event => void toggleUntilNextAnchor(entry.anchorIndex, event.currentTarget.checked)} />Until next anchor</label>
+                {/if}
+              </div>
+            {/each}
+          </th>
+        {/each}</tr>
+        <tr>{#each displayRanges as item (`headers-${item.rangeId}`)}
+          <th>Reference ATTRACT</th><th>Best-fit ATTRACT</th><th>Threshold</th><th>Interaction</th>
+        {/each}</tr>
+      </thead>
       <tbody>
         {#each (isRecord(fragments) && Array.isArray(fragments.fragments) ? fragments.fragments : []) as fragment (fragment.key)}
-          <tr class:clipped={!isKept(fragment.key)}>
+          <tr class:clipped={!isKept(fragment.key)} class:viewer-highlighted={hoveredFragmentNumbers.includes(fragment.number)}
+            class:table-highlighted={locallyHoveredFragment === fragment.number}
+            onpointerenter={() => hoverFragment(fragment.number)} onpointerleave={() => hoverFragment(null)}>
             <th scope="row">{fragment.key}</th>
-            {#each rangeRows.slice(1) as proteinRange, rangeIndex (`${proteinRange.chain}:${proteinRange.start}-${proteinRange.end}`)}
-              {@const rangeId = `range-${rangeIndex + 2}`}
+            {#each displayRanges as item (item.rangeId)}
+              {@const proteinRange = item.row}
+              {@const rangeId = item.rangeId}
+              {@const matrixColumn = matrixDraft?.ranges.indexOf(rangeId) ?? -1}
+              {@const matrixRow = rows?.indexOf(fragment.key) ?? -1}
               {@const reference = rowEnergy(rangeId, fragment.key, 'reference')}
               {@const bestfit = rowEnergy(rangeId, fragment.key, 'bestfit')}
               {@const threshold = thresholdValue(proteinRange, fragment.key)}
               {@const computed = computedValue(proteinRange, fragment.key)}
-              <td class="stage5-energy" style={`background:${energyColor(reference?.energy)}`} title={reference?.error ?? 'Capped at ±20'}>{reference?.error ? `Error: ${reference.error}` : energyLabel(reference?.energy)}</td>
-              <td class="stage5-energy" style={`background:${energyColor(bestfit?.energy)}`} title={bestfit?.error ?? 'Capped at ±20'}>{bestfit?.error ? `Error: ${bestfit.error}` : energyLabel(bestfit?.energy)}</td>
+              <td class="stage5-energy" style={`background:${energyColor(reference?.energy)}`} title={reference?.error ?? 'Capped at ±20; negative is better'}>{reference?.error ? `Error: ${reference.error}` : energyLabel(reference?.energy)}</td>
+              <td class="stage5-energy" style={`background:${energyColor(bestfit?.energy)}`} title={bestfit?.error ?? 'Capped at ±20; negative is better'}>{bestfit?.error ? `Error: ${bestfit.error}` : energyLabel(bestfit?.energy)}</td>
               <td class="stage5-threshold-cell" class:inactive={!isMatrixCellActive(rangeId, fragment.key)}>
                 <input aria-label={`${fragment.key} ${rangeId} energy threshold`} value={threshold ?? ''} disabled={!canEdit} onchange={event => editThreshold(proteinRange, fragment.key, event.currentTarget.value)} />
                 {#if computed !== null}<small class="stage5-computed-threshold">Computed: {computed}</small>{/if}
                 {#if computed !== null && threshold !== computed}<span class="stage5-diff" title="Differs from computed">●</span>{/if}
                 <button class="stage4-revert" aria-label={`Revert ${fragment.key} ${rangeId} to computed`} disabled={!thresholdsFresh || computed === null || threshold === computed} onclick={() => revertThreshold(proteinRange, fragment.key)}>↶</button>
+              </td>
+              <td class="stage5-matrix-cell">
+                <label><input type="checkbox" aria-label={`${fragment.key} / ${rangeId} interaction`}
+                  checked={matrixRow >= 0 && matrixColumn >= 0 && matrixDraft?.grid?.[matrixRow]?.[matrixColumn] === true}
+                  disabled={!matrixDraft || !matrixStructureMatches || !matrixUsable || !canEdit || matrixBusy || matrixRow < 0 || matrixColumn < 0}
+                  onchange={() => void toggleCell(matrixRow, matrixColumn)} />
+                  <span>Interact</span></label>
               </td>
             {/each}
           </tr>
@@ -306,51 +391,6 @@
       </tbody>
     </table>
   </div>
-
-  <section class="stage5-matrix-section" aria-label="Interaction matrix editor">
-    <div class="stage5-matrix-heading"><div><h2>Interaction matrix</h2><p>Each protein range has one column. Selected anchors keep their candidate fragment locks in that shared column; Recompute grows runs over rows whose reference or best-fit energy reaches 1.</p></div>
-      <button class="button button-secondary" onclick={recompute} disabled={matrixBusy}>Recompute</button>
-    </div>
-    {#if matrixError}<p class="stage5-error" role="alert">{matrixError}. Recompute when current energetics are ready.</p>{/if}
-    {#if !anchors}<p class="stage5-error" role="alert">Selected anchors could not be mapped to the kept fragment rows.</p>{/if}
-    <div class="stage5-matrix-wrap">
-      <table class="stage5-matrix" aria-label="Interaction matrix by protein range">
-        <thead><tr><th scope="col">Fragment</th>{#each matrixRanges as rangeId, column (rangeId)}
-          {@const anchorsInRange = selectedAnchors.map((anchor, anchorIndex) => ({ anchor, anchorIndex }))
-            .filter(item => item.anchor.range === rangeId)}
-          <th scope="col" aria-label={`Protein range ${rangeId}`}><strong>{rangeId}</strong>
-            {#if anchorsInRange.length === 0}<small>No selected anchor locks</small>{/if}
-            {#each anchorsInRange as item, anchorPosition (`${item.anchor.resid}:${item.anchorIndex}`)}
-              {@const anchor = item.anchor}
-              {@const join = matrixDraft && anchors ? untilNextAnchorState(matrixDraft, item.anchorIndex, anchors) : null}
-              <div class="stage5-anchor-locks">
-                <small>Anchor {anchor.resid}: {anchor.locks.map(lock => `${lock.fragment} (nt ${lock.nucleotide})`).join(', ')}</small>
-                {#if anchorPosition + 1 < anchorsInRange.length}
-                  {@const nextAnchor = anchorsInRange[anchorPosition + 1].anchor}
-                  <label class="stage5-until-next"><input type="checkbox"
-                    aria-label={`Join anchor ${anchor.resid} to anchor ${nextAnchor.resid} in ${rangeId}`}
-                    checked={join?.joined || join?.forced || false}
-                    disabled={!matrixDraft || !matrixStructureMatches || !matrixUsable || !canEdit || matrixBusy || !!join?.forced}
-                    onchange={event => void toggleUntilNextAnchor(item.anchorIndex, event.currentTarget.checked)} />Until next anchor</label>
-                {/if}
-              </div>
-            {/each}
-          </th>
-        {/each}</tr></thead>
-        <tbody>
-          {#each rows ?? [] as key, row (`${key}`)}
-            {@const rowIndex = rows?.indexOf(key) ?? -1}
-            <tr><th scope="row">{key}</th>{#each matrixRanges as rangeId, column (rangeId)}
-              <td><input type="checkbox" aria-label={`${key} / ${rangeId}`}
-                checked={matrixStructureMatches ? (matrixDraft?.grid?.[rowIndex]?.[column] ?? false) : false}
-                disabled={!matrixDraft || !matrixStructureMatches || !matrixUsable || !canEdit || matrixBusy}
-                onchange={() => void toggleCell(rowIndex, column)} /></td>
-            {/each}</tr>
-          {/each}
-        </tbody>
-      </table>
-    </div>
-  </section>
 
   {#if message}<p class="stage5-error" role="alert">{message}</p>{/if}
   {#if validatorFailed}<p class="stage5-error" role="alert">Energy-threshold validation failed. Correct the addressed S24 table before continuing.</p>{/if}

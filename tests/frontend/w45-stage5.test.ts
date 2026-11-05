@@ -238,7 +238,7 @@ describe('W5 P5.3/P5.4 range columns, anchor locks, and Recompute', () => {
   }
   function vector(): any {
     const result = energetics();
-    const values: Array<[number, number] | null> = [[2, 0], [.999, -.999], [1, 0], [0, 0], [0, -1], [25, 0], null, [-4, 0], [0, 0]];
+    const values: Array<[number, number] | null> = [[4, 0], [2.999, -2.999], [3, 0], [0, 0], [0, -3], [25, 0], null, [-4, 0], [0, 0]];
     result.ranges[0].rows.forEach((row: any, index: number) => {
       row.reference = { energy: values[index]?.[0] ?? null, error: values[index] === null ? 'bad ligand' : null };
       row.bestfit = { energy: values[index]?.[1] ?? null, error: values[index] === null ? 'bad ligand' : null };
@@ -312,7 +312,7 @@ describe('W5 P5.3/P5.4 range columns, anchor locks, and Recompute', () => {
     expect(validateStage5InteractionMatrix(restored, keys, full, energy, ranges)).toMatch(/107/);
     expect(validateStage5InteractionMatrix(value, value.rows, clipped, energy, ranges)).toBeNull();
   });
-  it('M1 includes exact magnitude 1 and positive clash, excludes low/error stop rows and unreachable rows', () => {
+  it('M1 includes exact magnitude 3 and positive clash, excludes low/error stop rows and unreachable rows', () => {
     const items = [anchorAt(4)];
     const energy = vector();
     const actual = recomputeInteractionMatrix(emptyFor(items), items, energy)!;

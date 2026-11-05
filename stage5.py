@@ -415,7 +415,7 @@ def _has_energy(pair: tuple[dict, dict] | None) -> bool:
 def _grows(pair: tuple[dict, dict] | None) -> bool:
     if not _has_energy(pair):
         return False
-    return any(abs(float(item["energy"])) >= 1 for item in pair)
+    return any(abs(float(item["energy"])) >= 3 for item in pair)
 
 
 def validate_interaction_matrix(

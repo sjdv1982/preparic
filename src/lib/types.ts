@@ -85,5 +85,7 @@ export interface RenderSpec {
   alwaysVisible?: RangeSpec[];
   sidechainRanges?: RangeSpec[];
   stackings?: StackingViewerInput[];
+  stage5ProteinRanges?: Array<{ range: RangeSpec; color: number; transparent?: boolean }>;
+  stage5TransparentRanges?: RangeSpec[];
   others?: OtherChainsMode;
 }

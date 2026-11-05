@@ -32,6 +32,15 @@ export function rangeExpression(range: RangeSpec): Expression {
   });
 }
 
+export function polymerExpression(): Expression {
+  return MS.struct.generator.atomGroups({
+    'entity-test': MS.core.rel.eq([
+      MS.struct.atomProperty.macromolecular.entityType(),
+      'polymer',
+    ]),
+  });
+}
+
 export function sidechainRangeExpression(range: RangeSpec): Expression {
   return MS.struct.modifier.intersectBy({
     0: rangeExpression(range),

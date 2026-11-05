@@ -1,6 +1,13 @@
 import { energyThresholdEditsIsWellFormed, markerIsWellFormed, markerMatchesUpstream, type ProjectSnapshot } from './project-state';
 
 export interface Stage5Range { chain: string; start: number; end: number }
+export const stage5RangePalette = [
+  { css: '#f4a261', molstar: 0xf4a261 },
+  { css: '#6ec5b8', molstar: 0x6ec5b8 },
+  { css: '#a78bfa', molstar: 0xa78bfa },
+  { css: '#f472b6', molstar: 0xf472b6 },
+  { css: '#60a5fa', molstar: 0x60a5fa },
+] as const;
 export interface Stage5S14 {
   schema: 1;
   basis: string[];
@@ -394,7 +401,7 @@ function hasValidEnergies(energetics: unknown, range: string, fragment: string):
 function grows(energetics: unknown, range: string, fragment: string): boolean {
   const row = energyCell(energetics, range, fragment);
   if (!hasValidEnergies(energetics, range, fragment)) return false;
-  return Math.abs(row.reference.energy) >= 1 || Math.abs(row.bestfit.energy) >= 1;
+  return Math.abs(row.reference.energy) >= 3 || Math.abs(row.bestfit.energy) >= 3;
 }
 
 export function adaptInteractionMatrix(

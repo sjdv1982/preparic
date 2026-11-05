@@ -5,6 +5,7 @@ import { PluginBehaviors } from 'molstar/lib/mol-plugin/behavior.js';
 import { PluginContext } from 'molstar/lib/mol-plugin/context.js';
 import { DefaultPluginSpec } from 'molstar/lib/mol-plugin/spec.js';
 import { Script } from 'molstar/lib/mol-script/script.js';
+import { MolScriptBuilder as MS } from 'molstar/lib/mol-script/language/builder.js';
 import { Mesh } from 'molstar/lib/mol-geo/geometry/mesh/mesh.js';
 import { MeshBuilder } from 'molstar/lib/mol-geo/geometry/mesh/mesh-builder.js';
 import { addSimpleCylinder } from 'molstar/lib/mol-geo/geometry/mesh/builder/cylinder.js';
@@ -17,7 +18,7 @@ import { PluginStateObject as SO } from 'molstar/lib/mol-plugin-state/objects.js
 import { ShapeRepresentation3D } from 'molstar/lib/mol-plugin-state/transforms/representation.js';
 import { StateSelection } from 'molstar/lib/mol-state/index.js';
 import type { ResidueIndex } from 'molstar/lib/mol-model/structure/model/indexing.js';
-import { chainExpression, complementExpression, rangeExpression, residueAddressExpression, sidechainRangeExpression, unionExpression } from './expressions';
+import { chainExpression, complementExpression, polymerExpression, rangeExpression, residueAddressExpression, sidechainRangeExpression, unionExpression } from './expressions';
 import { stackingDashSegments, type DashSegment } from './stacking-geometry';
 import { nameChains, type ChainUnitInput } from '../chains';
 import { uniqueStackingParticipantRanges } from '../stackings';
@@ -883,18 +884,72 @@ export class MolViewer {
     if (token !== this.renderToken) return;
 
     if (!spec.focus) {
-      const polymer = await this.plugin.builders.structure.tryCreateComponentStatic(
-        this.structureRef,
-        'polymer',
-        { label: 'Polymer', tags: [RENDER_TAG] },
-      );
+      const stage5ProteinRanges = spec.stage5ProteinRanges;
+      const stage5TransparentRanges = spec.stage5TransparentRanges ?? [];
+      const excluded = [
+        ...(stage5ProteinRanges ?? []).map(item => rangeExpression(item.range)),
+        ...stage5TransparentRanges.map(rangeExpression),
+      ];
+      const polymerSelection = stage5ProteinRanges
+        ? this.plugin.builders.structure.tryCreateComponentFromExpression(
+            this.structureRef,
+            MS.struct.modifier.intersectBy({
+              0: polymerExpression(),
+              by: complementExpression(unionExpression(excluded)),
+            }),
+            'stage5-polymer-rest',
+            { label: 'Other polymer residues', tags: [RENDER_TAG] },
+          )
+        : this.plugin.builders.structure.tryCreateComponentStatic(
+            this.structureRef,
+            'polymer',
+            { label: 'Polymer', tags: [RENDER_TAG] },
+          );
+      const polymer = await polymerSelection;
       if (polymer && token === this.renderToken) {
         await this.plugin.builders.structure.representation.addRepresentation(polymer, {
           type: 'cartoon',
           color: 'chain-id',
         }, { tag: RENDER_TAG });
       }
-      if (token === this.renderToken) await this.renderStackingOverlays(spec.stackings ?? [], token);
+      for (const item of stage5ProteinRanges ?? []) {
+        if (token !== this.renderToken) return;
+        const component = await this.plugin.builders.structure.tryCreateComponentFromExpression(
+          this.structureRef,
+          rangeExpression(item.range),
+          item.transparent ? 'stage5-transparent-range' : 'stage5-protein-range',
+          { label: 'Protein range', tags: [RENDER_TAG] },
+        );
+        if (component && token === this.renderToken) {
+          await this.plugin.builders.structure.representation.addRepresentation(component, {
+            type: 'cartoon',
+            color: 'uniform',
+            colorParams: { value: Color(item.color) },
+            ...(item.transparent ? { typeParams: { alpha: 0.2 } } : {}),
+          }, { tag: RENDER_TAG });
+        }
+      }
+      for (const range of stage5TransparentRanges) {
+        if (token !== this.renderToken) return;
+        const component = await this.plugin.builders.structure.tryCreateComponentFromExpression(
+          this.structureRef,
+          rangeExpression(range),
+          'stage5-clipped-rna',
+          { label: 'Clipped RNA residues', tags: [RENDER_TAG] },
+        );
+        if (component && token === this.renderToken) {
+          await this.plugin.builders.structure.representation.addRepresentation(component, {
+            type: 'cartoon',
+            color: 'chain-id',
+            typeParams: { alpha: 0.2 },
+          }, { tag: RENDER_TAG });
+        }
+      }
+      if (token === this.renderToken) await this.renderStackingOverlays(
+        spec.stackings ?? [],
+        token,
+        (stage5ProteinRanges ?? []).filter(item => item.transparent).map(item => item.range),
+      );
       return;
     }
 
@@ -946,10 +1001,18 @@ export class MolViewer {
     }, { tag: RENDER_TAG });
   }
 
-  private async renderStackingOverlays(stackings: readonly StackingViewerInput[], token: number): Promise<void> {
+  private async renderStackingOverlays(
+    stackings: readonly StackingViewerInput[],
+    token: number,
+    transparentProteinRanges: readonly RangeSpec[] = [],
+  ): Promise<void> {
     if (stackings.length === 0 || token !== this.renderToken || !this.structureRef) return;
 
-    const participantRanges = uniqueStackingParticipantRanges(stackings);
+    const participantRanges = uniqueStackingParticipantRanges(stackings).filter(range =>
+      !transparentProteinRanges.some(transparent =>
+        transparent.labelAsymId === range.labelAsymId
+        && transparent.instanceId === range.instanceId
+        && transparent.start <= range.start && transparent.end >= range.end));
     if (participantRanges.length > 0) {
       const participants = await this.plugin.builders.structure.tryCreateComponentFromExpression(
         this.structureRef,
