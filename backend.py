@@ -789,6 +789,10 @@ def build_context() -> Context:
         _mounted_decision(context, "interaction_matrix", INTERACTION_MATRIX_PATH)
         _mounted_decision(context, "gaussian_classes", GAUSSIAN_CLASSES_PATH)
         _mounted_decision(context, "energy_threshold_edits", ENERGY_THRESHOLD_EDITS_PATH)
+        # S26: shared stage-4 view state for collaborative viewing. Not a
+        # decision: deliberately unmounted (a restart resets it to null),
+        # without a loader, and read by no transformer.
+        context.stage4_active_nucleotide = Cell(celltype="plain")
 
         context.ranges_to_pdb = _ranges_to_pdb
         context.ranges_to_pdb.pins.cif = context.cif
@@ -1197,6 +1201,7 @@ def build_context() -> Context:
         context.interaction_matrix.share(readonly=False)
         context.gaussian_classes.share(readonly=False)
         context.energy_threshold_edits.share(readonly=False)
+        context.stage4_active_nucleotide.share(readonly=False)
         context.energetics.share()
         context.energy_thresholds.mount(
             MOUNT_DIRECTORY / "computed-energy-thresholds.json", mode="w", authority="cell"

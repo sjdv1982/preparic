@@ -120,6 +120,9 @@ def test_all_decisions_and_cif_are_file_authoritative_mounts(monkeypatch, tmp_pa
             assert getattr(context, name).share.spec.readonly is False, name
         assert context.range_specs.share.spec.readonly is True
         assert context.range_pdbs.share.spec is None
+        # S26 is shared view state, deliberately not persisted (CB §8.2).
+        assert context.stage4_active_nucleotide.share.spec.readonly is False
+        assert context.stage4_active_nucleotide.mount.spec is None
 
         cell_files = {
             "best_fit_thresholds": "best-fit-thresholds.json",
