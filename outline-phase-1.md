@@ -1,5 +1,7 @@
 # Web app first phase outline
 
+> **Historical (phase 1).** Preparic now has six stages and a Seamless backend. See [README.md](README.md) and [STAGES.md](STAGES.md); the requirements are in Alaric's `plans/final/oracle-contract.md`.
+
 The overall function of the web app is to define selections on a molecular structure. The current outline is for the first phase: there will be follow-up phase where there is interaction with a server. The app has stages: the follow-up phases will add additional stages.
 
 Throughout the stages, there will be a Mol* viewer with all buttons disabled: only camera and selection is working.

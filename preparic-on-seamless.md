@@ -1,5 +1,7 @@
 # Preparic on Seamless
 
+> **Historical analysis.** Its deployment part (hashserver, generic graph server) is not what preparic does. By author decision, preparic runs eight local spawn workers with no persistent caching, hashserver or database; see [README.md](README.md#execution-model). The development setup (Vite in front of the share server) still applies.
+
 Analysis · 15 October 2026
 
 How to develop the preparic Vite + Svelte app against a Seamless share server while keeping Vite's compiling and hot reloading. Then how to deploy it as a Context graph whose bytes live on a hashserver, served by a generic graph server.

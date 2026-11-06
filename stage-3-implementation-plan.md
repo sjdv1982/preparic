@@ -1,5 +1,7 @@
 # Stage 3 — stacking interaction implementation plan
 
+> **Historical.** Superseded where it differs by Alaric's `plans/final/oracle-contract.md` and `plans/final/state-transitions.md`. Stage 3's current behaviour is in [STAGES.md](STAGES.md); for example, stacking normals now come from a Kabsch fit onto the ring references (D8), and the default selection is distance ≤ 5 Å and φ < 60°.
+
 ## Goal and fixed contracts
 
 Stage 3 consumes the **pre-aareduce** `range_pdbs` output, detects protein–RNA

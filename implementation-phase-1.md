@@ -1,5 +1,7 @@
 # Phase 1 plan: molecular-selection web app (Svelte + Mol*)
 
+> **Historical (phase 1).** Preparic now has six stages and a Seamless backend. See [README.md](README.md) and [STAGES.md](STAGES.md); the requirements are in Alaric's `plans/final/oracle-contract.md`.
+
 ## Context
 `outline-phase-1.md` describes the first phase of a web app for defining selections on a molecular structure. There is no server yet, and later phases will add more stages. Phase 1 has a camera-and-picking-only Mol* viewer and two stages:
 1. **Stage 1:** pick a PDB code and a biological unit (biounit).
