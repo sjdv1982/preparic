@@ -23,7 +23,7 @@ type ShareKey = 'pdbcode' | 'biounit' | 'ranges' | 'range_specs' | 'stackings' |
   | 'structure_id' | 'range_pdbs_aa' | 'fragments' | 'best_fit_thresholds' | 'best_fits' | 'energetics'
   | 'reference_fragment_pdbs'
   | 'energy_thresholds' | 'interactions' | 'bestfit_stackings' | 'gaussian_validation'
-  | 'gaussian_scores' | 'stage4_active_nucleotide';
+  | 'gaussian_scores' | 'export_admission' | 'stage4_active_nucleotide';
 
 export interface SharedCell {
   value: SharedValue;
@@ -33,12 +33,15 @@ export interface SharedCell {
   marker?: number;
   url?: string;
   binary?: boolean;
+  checksum?: string | null;
 }
 
 interface StateGraphNode {
   path: Array<string | number>;
   state?: string;
+  checksum?: string | null;
   exception?: string | null;
+  block_reason?: string | null;
 }
 
 interface StateGraph {
@@ -76,6 +79,7 @@ export interface ShareContext {
   bestfit_stackings?: SharedCell;
   gaussian_validation?: SharedCell;
   gaussian_scores?: SharedCell;
+  export_admission?: SharedCell;
   stage4_active_nucleotide?: SharedCell;
   'cif.cif'?: SharedCell;
 }
@@ -151,6 +155,7 @@ export const seamlessState = $state({
   } as ProjectSnapshot,
   decisionErrors: {} as Partial<Record<DecisionDiagnosticKey, string>>,
   stateGraphErrors: [] as Array<{ name: string; state: string; message: string }>,
+  stateGraphNodes: [] as StateGraphNode[],
   hasInitialStateGraph: false,
   pendingInputs: [] as string[],
   syncNotice: '',
@@ -159,6 +164,7 @@ export const seamlessState = $state({
   rangeSpecs: null as unknown,
   rangePdbsAa: null as unknown,
   computed: {} as Partial<Record<ShareKey, unknown>>,
+  computedChecksums: {} as Partial<Record<ShareKey, string>>,
   computedFreshness: {} as Partial<Record<ShareKey, boolean>>,
   pdbCode: '',
   biounitIndex: 1,
@@ -212,7 +218,7 @@ const computedShareKeys: readonly ShareKey[] = [
   'range_specs', 'structure_id', 'range_pdbs_aa', 'stackings', 'fragments',
   'reference_fragment_pdbs', 'best_fit_thresholds', 'best_fits', 'energetics',
   'energy_thresholds', 'interactions', 'bestfit_stackings', 'gaussian_validation',
-  'gaussian_scores',
+  'gaussian_scores', 'export_admission',
 ];
 let websocketPoll: ReturnType<typeof setInterval> | undefined;
 let hasConnectedBefore = false;
@@ -742,11 +748,13 @@ function suspendForDisconnect(): void {
   seamlessState.status = 'disconnected';
   cancelStaleDebouncedProjectDecisions();
   cancelActiveNucleotideIntent();
+  seamlessState.computedChecksums = {};
   seamlessState.computedFreshness = {};
   seamlessState.structureIdReady = false;
   seamlessState.hasInitialStateGraph = false;
   seamlessState.stateGraphErrors = [];
   lastStateGraphNodes = [];
+  seamlessState.stateGraphNodes = [];
   seamlessState.stackingsReady = false;
   seamlessState.rangesReady = false;
   seamlessState.stackingSelectionReady = false;
@@ -884,6 +892,7 @@ function refreshComputedFreshness(): void {
 
 function receiveStateGraph(graph: StateGraph): void {
   lastStateGraphNodes = graph.nodes ?? [];
+  seamlessState.stateGraphNodes = lastStateGraphNodes;
   seamlessState.hasInitialStateGraph = true;
   refreshVisibleErrors();
 }
@@ -1033,6 +1042,9 @@ function receiveDecision(key: Exclude<DecisionKey, 'ranges'>, value: SharedValue
 function receiveComputed(key: ShareKey, value: SharedValue): void {
   const parsed = parseJsonValue(value);
   seamlessState.computed[key] = parsed;
+  const checksum = client?.[key]?.checksum;
+  if (typeof checksum === 'string' && checksum.length > 0) seamlessState.computedChecksums[key] = checksum;
+  else delete seamlessState.computedChecksums[key];
   received.add(key);
   if (key === 'range_specs') seamlessState.rangeSpecs = parsed;
   if (key === 'range_pdbs_aa') seamlessState.rangePdbsAa = parsed;
@@ -1042,6 +1054,13 @@ function receiveComputed(key: ShareKey, value: SharedValue): void {
   }
   refreshComputedFreshness();
   updateReady();
+}
+
+/** Resolve a backend resource through the active Seamless REST/proxy origin. */
+export function backendUrl(path: string): string {
+  const base = client?.self.server ?? (typeof window === 'undefined' ? '' : window.location.origin);
+  if (!base) throw new Error('The Preparic backend URL is unavailable.');
+  return new URL(path, `${base.replace(/\/$/, '')}/`).href;
 }
 
 function hasSharedCell(key: ShareKey, keys: string[], allowUrlFallback = false): boolean {
@@ -1354,6 +1373,7 @@ function attachShare(key: ShareKey, keys: string[], allowUrlFallback = false): v
     case 'bestfit_stackings':
     case 'gaussian_validation':
     case 'gaussian_scores':
+    case 'export_admission':
       install(value => receiveComputed(key, value));
       break;
     case 'stage4_active_nucleotide':
@@ -1368,8 +1388,7 @@ async function readShareFresh(key: ShareKey): Promise<void> {
   if (!cell || !cell.url || !receiver || typeof fetch !== 'function') {
     throw new Error(`Shared ${key} cannot be reread.`);
   }
-  const base = client?.self.server ?? (typeof window === 'undefined' ? '' : window.location.origin);
-  const url = new URL(cell.url, `${base.replace(/\/$/, '')}/`);
+  const url = new URL(backendUrl(cell.url));
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
@@ -1380,11 +1399,13 @@ async function readShareFresh(key: ShareKey): Promise<void> {
       else value = cell.binary ? await response.blob() : await response.text();
       const markerHeader = response.headers.get('x-seamless-marker');
       const serverMarker = markerHeader === null ? undefined : Number(markerHeader);
+      const checksumHeader = response.headers.get('etag')?.replace(/^"|"$/g, '');
       if (Number.isSafeInteger(serverMarker) && Number.isSafeInteger(cell.marker)
         && (serverMarker as number) < (cell.marker as number)) {
         throw new Error('A newer share update arrived during the reread.');
       }
       if (Number.isSafeInteger(serverMarker)) cell.marker = serverMarker as number;
+      if (checksumHeader) cell.checksum = checksumHeader;
       cell.value = value;
       applyingAuthoritativeRead = true;
       receiver(value);
@@ -1401,8 +1422,7 @@ async function readShareFresh(key: ShareKey): Promise<void> {
 async function readPendingCifFresh(): Promise<void> {
   const cell = client?.['cif.cif'];
   if (!cell?.url) throw new Error('The shared CIF cannot be reread.');
-  const base = client?.self.server ?? (typeof window === 'undefined' ? '' : window.location.origin);
-  const response = await fetch(new URL(cell.url, `${base.replace(/\/$/, '')}/`), { cache: 'no-store' });
+  const response = await fetch(new URL(backendUrl(cell.url)), { cache: 'no-store' });
   if (!response.ok) throw new Error(`The shared CIF could not be reread (HTTP ${response.status}).`);
   const value = await response.text();
   const markerHeader = response.headers.get('x-seamless-marker');
@@ -1420,7 +1440,7 @@ async function resynchronizeShares(keys: string[]): Promise<void> {
     'best_fit_clip', 'interaction_matrix', 'gaussian_classes', 'energy_threshold_edits',
     'range_specs', 'structure_id', 'range_pdbs_aa', 'stackings', 'fragments', 'reference_fragment_pdbs',
     'best_fit_thresholds', 'best_fits', 'energetics', 'energy_thresholds', 'interactions',
-    'bestfit_stackings', 'gaussian_validation', 'gaussian_scores', 'stage4_active_nucleotide',
+    'bestfit_stackings', 'gaussian_validation', 'gaussian_scores', 'export_admission', 'stage4_active_nucleotide',
   ];
   const tasks = ordered.filter(key => hasListedShare(key, keys)).map(readShareFresh);
   if (pendingStructureCommit && keys.includes('cif.cif')) tasks.push(readPendingCifFresh());
@@ -1490,11 +1510,13 @@ function attachShareContext(context: ShareContext): void {
     if (reconnect) {
       detachUnlistedShareReceivers(keys);
       seamlessState.ready = false;
+      seamlessState.computedChecksums = {};
       seamlessState.computedFreshness = {};
       seamlessState.structureIdReady = false;
       seamlessState.hasInitialStateGraph = false;
       seamlessState.stateGraphErrors = [];
       lastStateGraphNodes = [];
+      seamlessState.stateGraphNodes = [];
       received.clear();
       seamlessState.status = 'waiting-for-shares';
       seamlessState.stackingsReady = false;
@@ -1515,7 +1537,7 @@ function attachShareContext(context: ShareContext): void {
       'threshold_edits', 'best_fit_clip', 'interaction_matrix', 'gaussian_classes', 'energy_threshold_edits',
       'range_specs', 'structure_id', 'range_pdbs_aa', 'fragments', 'reference_fragment_pdbs', 'best_fit_thresholds', 'best_fits',
       'energetics', 'energy_thresholds', 'interactions', 'bestfit_stackings', 'gaussian_validation',
-      'gaussian_scores', 'stage4_active_nucleotide',
+      'gaussian_scores', 'export_admission', 'stage4_active_nucleotide',
     ] as const) attachShare(key, keys, initialShareList);
     const cifCell = context['cif.cif'];
     if (cifCell) cifCell.onchange = value => { if (!resyncInProgress) receiveCifCommit(value); };
@@ -1555,6 +1577,7 @@ export function connectToSeamless(connect: ShareConnector): void {
     gaussian_classes: null,
   };
   seamlessState.computed = {};
+  seamlessState.computedChecksums = {};
   seamlessState.computedFreshness = {};
   seamlessState.decisionErrors = {};
   seamlessState.energyThresholdEdits = null;
@@ -1570,6 +1593,7 @@ export function connectToSeamless(connect: ShareConnector): void {
   seamlessState.rangesReady = false;
   seamlessState.structureIdReady = false;
   seamlessState.hasInitialStateGraph = false;
+  seamlessState.stateGraphNodes = [];
   received.clear();
   appState.stackings = [];
   appState.stackingSelection = [];
@@ -1602,8 +1626,7 @@ export async function readSharedCif(): Promise<string> {
   const cell = client?.['cif.cif'];
   if (!cell) throw new Error('The shared CIF cell is not available.');
   if (!cell.url || typeof fetch !== 'function') throw new Error('The shared CIF could not be read.');
-  const base = client?.self.server ?? (typeof window === 'undefined' ? '' : window.location.origin);
-  const response = await fetch(new URL(cell.url, `${base.replace(/\/$/, '')}/`), { cache: 'no-store' });
+  const response = await fetch(new URL(backendUrl(cell.url)), { cache: 'no-store' });
   if (!response.ok) throw new Error(`The shared CIF could not be read (HTTP ${response.status}).`);
   const cif = await response.text();
   if (!cif.trim()) throw new Error('The stored shared CIF is empty.');

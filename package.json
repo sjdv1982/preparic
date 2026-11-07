@@ -11,6 +11,7 @@
     "test:backend": "python -m pytest tests/backend"
   },
   "dependencies": {
+    "fflate": "^0.8.3",
     "molstar": "5.13.1",
     "svelte": "^5.0.0",
     "yaml": "^2.9.1"

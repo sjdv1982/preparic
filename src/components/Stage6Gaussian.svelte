@@ -1,12 +1,27 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
   import Stage4BestFits from './Stage4BestFits.svelte';
   import {
     seamlessState,
+    backendUrl,
     deactivateProjectDecisionAndWait,
     setEnergyThresholdEdits,
     setProjectDecisionDebounced,
   } from '../lib/seamless.svelte';
+  import {
+    exportDecisionSignature,
+    exportIsStale,
+    exportReadiness as getExportReadiness,
+    exportWarningAcknowledged,
+  } from '../lib/export';
+  import {
+    cancelExportRequest,
+    createExportRequest,
+    exportRequestIsCurrent,
+    saveExportBlob,
+    transferExport,
+    type ExportRequest,
+  } from '../lib/export-download';
   import { cloneStage5Decision, stage5Rows, validEnergyEdit, type Stage5S24, type Stage5Range } from '../lib/stage5';
   import {
     editableGaussianRows,
@@ -34,6 +49,11 @@
   let classWriteRevision = 0;
   let initialFilterVersion = $state<string | null>(null);
   let modelChanged = $state(false);
+  let acknowledgedDigest = $state<string | null>(null);
+  let downloadedDigest = $state<string | null>(null);
+  let activeExportRequest = $state.raw<ExportRequest | null>(null);
+  let activeDecisionSignature: string | null = null;
+  let exportMessage = $state('');
 
   const isRecord = (value: unknown): value is Record<string, any> =>
     value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -58,6 +78,36 @@
   let computedFresh = $derived(seamlessState.computedFreshness.gaussian_scores === true);
   let geometryFresh = $derived(seamlessState.computedFreshness.bestfit_stackings === true);
   let validationFresh = $derived(seamlessState.computedFreshness.gaussian_validation === true);
+  let exportAdmissionNode = $derived(seamlessState.stateGraphNodes.find(node =>
+    node.path.length === 1 && node.path[0] === 'export_admission'));
+  let exportTreeNode = $derived(seamlessState.stateGraphNodes.find(node =>
+    node.path.length === 1 && node.path[0] === 'export_tree'));
+  let exportAdmission = $derived(seamlessState.computed.export_admission);
+  let exportGate = $derived(getExportReadiness({
+    stage: seamlessState.projectStage,
+    connected: seamlessState.ready && seamlessState.status === 'live',
+    writePending: seamlessState.pendingInputs.length > 0
+      || seamlessState.pdbCodePendingWrite || seamlessState.biounitIndexPendingWrite
+      || seamlessState.stackingSelectionPendingWrite,
+    stage6EchoesFresh: geometryFresh && computedFresh && validationFresh,
+    admission: exportAdmission,
+    admissionState: exportAdmissionNode?.state,
+    treeState: exportTreeNode?.state,
+    admissionNodeChecksum: exportAdmissionNode?.checksum,
+    admissionValueChecksum: seamlessState.computedChecksums.export_admission,
+    admissionError: exportAdmissionNode?.exception ?? exportAdmissionNode?.block_reason ?? '',
+    treeError: exportTreeNode?.exception ?? exportTreeNode?.block_reason ?? '',
+  }));
+  let currentAdmission = $derived(exportGate.admission
+    && exportAdmissionNode?.state === 'complete'
+    && typeof exportAdmissionNode.checksum === 'string'
+    && exportAdmissionNode.checksum === seamlessState.computedChecksums.export_admission
+    ? exportGate.admission : null);
+  let exportAcknowledged = $derived(exportWarningAcknowledged(exportAdmission, acknowledgedDigest));
+  let exportCanStart = $derived(exportGate.enabled
+    && (!exportGate.requiresAcknowledgement || exportAcknowledged)
+    && activeExportRequest === null);
+  let exportStale = $derived(exportIsStale(downloadedDigest, exportGate.admission?.digest ?? null));
   let filterNames = $derived(isRecord(scores) && Array.isArray(scores.filter_names)
     ? scores.filter_names.filter((name: unknown): name is string => typeof name === 'string') : []);
   let rrmOptions = $derived(gaussianRrmOptions(filterNames));
@@ -95,6 +145,7 @@
     const computed = computedClasses.find((row: any) => row?.key === key);
     if (!current || !computed || !classComputed(key)) return;
     const nextRow = update(current, computed);
+    cancelCurrentExport();
     const next: GaussianClassMarker = {
       ...classDraft,
       rows: classDraft.rows.map(row => row.key === key ? nextRow : row),
@@ -125,6 +176,7 @@
     if (!classDraft || !canEdit || !computedFresh) return;
     const next = revertGaussianClassRow(classDraft, key, scores);
     if (!next) return;
+    cancelCurrentExport();
     classDraft = next;
     message = '';
     const revision = ++classWriteRevision;
@@ -144,6 +196,7 @@
       message = 'Fresh computed classes do not match the selected stacking keys.';
       return;
     }
+    cancelCurrentExport();
     classDraft = next;
     message = '';
     const revision = ++classWriteRevision;
@@ -236,10 +289,115 @@
   }
 
   function leaveStage(): void {
-    void onBack().then(accepted => {
+    void leaveStageAndCancel().then(accepted => {
       if (!accepted) message = 'The class table could not be set aside before leaving stage 6.';
     });
   }
+
+  async function leaveStageAndCancel(): Promise<boolean> {
+    cancelCurrentExport();
+    return await onBack();
+  }
+
+  function cancelCurrentExport(): void {
+    if (activeExportRequest) cancelExportRequest(activeExportRequest);
+  }
+
+  function currentExportGate() {
+    return getExportReadiness({
+      stage: seamlessState.projectStage,
+      connected: seamlessState.ready && seamlessState.status === 'live',
+      writePending: seamlessState.pendingInputs.length > 0
+        || seamlessState.pdbCodePendingWrite || seamlessState.biounitIndexPendingWrite
+        || seamlessState.stackingSelectionPendingWrite,
+      stage6EchoesFresh: seamlessState.computedFreshness.bestfit_stackings === true
+        && seamlessState.computedFreshness.gaussian_scores === true
+        && seamlessState.computedFreshness.gaussian_validation === true,
+      admission: seamlessState.computed.export_admission,
+      admissionState: seamlessState.stateGraphNodes.find(node =>
+        node.path.length === 1 && node.path[0] === 'export_admission')?.state,
+      treeState: seamlessState.stateGraphNodes.find(node =>
+        node.path.length === 1 && node.path[0] === 'export_tree')?.state,
+      admissionNodeChecksum: seamlessState.stateGraphNodes.find(node =>
+        node.path.length === 1 && node.path[0] === 'export_admission')?.checksum,
+      admissionValueChecksum: seamlessState.computedChecksums.export_admission,
+      admissionError: seamlessState.stateGraphNodes.find(node =>
+        node.path.length === 1 && node.path[0] === 'export_admission')?.exception ?? '',
+      treeError: seamlessState.stateGraphNodes.find(node =>
+        node.path.length === 1 && node.path[0] === 'export_tree')?.exception ?? '',
+    });
+  }
+
+  function currentExportIsReady(request: ExportRequest): boolean {
+    const gate = currentExportGate();
+    const acknowledged = !gate.requiresAcknowledgement
+      || exportWarningAcknowledged(gate.admission, acknowledgedDigest);
+    return exportRequestIsCurrent(request, activeExportRequest, gate.admission?.digest ?? null,
+      gate.enabled && acknowledged);
+  }
+
+  function acknowledgeExport(event: Event): void {
+    const checked = (event.currentTarget as HTMLInputElement).checked;
+    const digest = currentAdmission?.digest;
+    if (checked && typeof digest === 'string') acknowledgedDigest = digest;
+    else if (!checked && acknowledgedDigest === digest) acknowledgedDigest = null;
+  }
+
+  async function downloadExport(): Promise<void> {
+    const gate = currentExportGate();
+    const admission = gate.admission;
+    if (!gate.enabled || activeExportRequest || !admission || typeof admission.digest !== 'string'
+      || (gate.requiresAcknowledgement && !exportWarningAcknowledged(admission, acknowledgedDigest))) return;
+
+    const digest = admission.digest;
+    const request = createExportRequest(digest);
+    const decisionSignature = exportDecisionSignature(seamlessState.projectSnapshot, seamlessState.energyThresholdEdits);
+    const filename = `${seamlessState.pdbCode.toLowerCase()}-alaric-${digest.slice(0, 12)}.zip`;
+    activeDecisionSignature = decisionSignature;
+    activeExportRequest = request;
+    exportMessage = '';
+    try {
+      const result = await transferExport({
+        url: backendUrl('/preparic/export.zip'),
+        digest,
+        filename,
+        request,
+        isCurrent: () => currentExportIsReady(request)
+          && activeDecisionSignature === exportDecisionSignature(
+            seamlessState.projectSnapshot, seamlessState.energyThresholdEdits),
+        save: blob => saveExportBlob(blob, filename),
+      });
+      if (result.kind === 'downloaded') {
+        downloadedDigest = digest;
+        exportMessage = '';
+      } else if (result.kind !== 'cancelled') {
+        exportMessage = result.message;
+      }
+    } catch (error) {
+      if (!request.cancelled) {
+        exportMessage = error instanceof Error ? `Export failed: ${error.message}` : 'Export failed.';
+      }
+    } finally {
+      if (activeExportRequest === request) {
+        activeExportRequest = null;
+        activeDecisionSignature = null;
+      }
+    }
+  }
+
+  $effect(() => {
+    const request = activeExportRequest;
+    const signature = exportDecisionSignature(seamlessState.projectSnapshot, seamlessState.energyThresholdEdits);
+    const gate = exportGate;
+    const acknowledged = !gate.requiresAcknowledgement
+      || exportWarningAcknowledged(gate.admission, acknowledgedDigest);
+    if (request && (request.digest !== (gate.admission?.digest ?? null)
+      || activeDecisionSignature !== signature || !gate.enabled || !acknowledged)) {
+      cancelExportRequest(request);
+    }
+  });
+
+  onDestroy(cancelCurrentExport);
 
   function errorFor(...names: string[]): string {
     return seamlessState.stateGraphErrors
@@ -368,7 +526,7 @@
     </div>
   </section>
 
-  <Stage4BestFits embedded={true} onBack={onBack} onContinue={async () => false} />
+  <Stage4BestFits embedded={true} onBack={leaveStageAndCancel} onContinue={async () => false} />
 
   <section class="stage6-section" aria-label="Editable energy thresholds">
     <div class="stage6-heading"><div><h2>Energy thresholds</h2><p>The same S24 cells remain editable in stages 5 and 6.</p></div>
@@ -393,6 +551,54 @@
           </tr>
         {/each}</tbody>
       </table></div>
+    {/if}
+  </section>
+
+  <section class="stage6-section stage6-export" aria-label="Export Alaric project">
+    <div class="stage6-heading">
+      <div><h2>Export project</h2><p>Download the current, validated DATA files and generator configurations.</p></div>
+      <button class="button button-primary" disabled={!exportCanStart} onclick={downloadExport}>
+        {activeExportRequest ? 'Preparing export…' : 'Download export ZIP'}
+      </button>
+    </div>
+    {#if exportGate.reason}
+      <p class="stage6-export-reason" role="status">{exportGate.reason}</p>
+    {/if}
+    {#if currentAdmission && currentAdmission.blocks.length > 0}
+      <ul class="stage6-export-blocks" aria-label="Export admission blocks">
+        {#each currentAdmission.blocks as block, index (`${block.code ?? ''}:${block.address ?? ''}:${index}`)}
+          <li><strong>{block.address ?? block.code ?? 'Export'}</strong>
+            {#if block.message}<span>{block.message}</span>{/if}
+            {#if block.remedy}<small>{block.remedy}</small>{/if}
+          </li>
+        {/each}
+      </ul>
+    {/if}
+    {#if currentAdmission && currentAdmission.warnings.length > 0}
+      <div class="stage6-export-consent">
+        <label class="stage6-export-warning">
+          <input type="checkbox" checked={exportWarningAcknowledged(exportAdmission, acknowledgedDigest)}
+            onchange={acknowledgeExport} />
+          <strong>The nearest-to-native structure doesn't pass the filters. Proceed anyway</strong>
+        </label>
+        <details class="stage6-export-warning-details">
+          <summary>Inspect {currentAdmission.warnings.length} export warning{currentAdmission.warnings.length === 1 ? '' : 's'}</summary>
+          <ul>
+            {#each currentAdmission.warnings as warning, index (`${warning.kind ?? ''}:${warning.address ?? ''}:${index}`)}
+              <li><strong>{warning.address ?? warning.kind ?? 'Warning'}</strong><span>{warning.message ?? 'Review this export warning.'}</span></li>
+            {/each}
+          </ul>
+        </details>
+      </div>
+    {/if}
+    {#if exportGate.enabled && exportGate.requiresAcknowledgement && !exportAcknowledged}
+      <p class="stage6-export-reason" role="status">Acknowledge the warnings before downloading this snapshot.</p>
+    {/if}
+    {#if exportStale}
+      <p class="stage6-export-stale" role="status">Export is stale</p>
+    {/if}
+    {#if exportMessage}
+      <p class="stage6-error" role={exportMessage.startsWith('Project changed during export') ? 'status' : 'alert'}>{exportMessage}</p>
     {/if}
   </section>
 

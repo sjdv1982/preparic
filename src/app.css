@@ -319,6 +319,20 @@ select.cell-editor { padding-right: 4px; }
 .stage6-model-changed { padding: 9px 11px; border: 1px solid rgba(218, 166, 86, .25); border-radius: 6px; color: #e3bc78; background: rgba(105, 75, 30, .13); font-size: 11px; }
 .stage6-error { padding: 9px 11px; border: 1px solid rgba(209, 103, 103, .3); border-radius: 6px; color: #edaaa2; background: rgba(94, 38, 42, .16); font-size: 11px; }
 .stage6-pending { padding: 8px 11px; border: 1px solid rgba(133, 157, 186, .14); border-radius: 6px; color: #8796a9; background: rgba(57, 76, 100, .1); font-size: 10px; }
+.stage6-export .stage6-heading { align-items: center; }
+.stage6-export-reason { margin: 0; color: #a4b2c4; font-size: 11px; }
+.stage6-export-blocks, .stage6-export-warning-details ul { display: grid; gap: 7px; margin: 8px 0 0; padding-left: 18px; color: #e8a39b; font-size: 10px; }
+.stage6-export-blocks li span, .stage6-export-blocks li small, .stage6-export-warning-details li span { display: block; margin-top: 3px; }
+.stage6-export-blocks li small { color: #ba928b; }
+.stage6-export-consent { display: grid; gap: 8px; }
+.stage6-export-warning { display: flex; align-items: flex-start; gap: 8px; color: #f07870; font-size: 12px; line-height: 1.45; }
+.stage6-export-warning input { flex: 0 0 auto; margin: 2px 0 0; accent-color: #df655e; }
+.stage6-export-warning strong { font-weight: 700; }
+.stage6-export-warning-details { color: #aeb9c8; font-size: 10px; }
+.stage6-export-warning-details summary { width: fit-content; cursor: pointer; color: #c9a16f; }
+.stage6-export-warning-details ul { color: #aeb9c8; }
+.stage6-export-warning-details li strong { color: #d7bd93; }
+.stage6-export-stale { margin: 0; color: #e5b66c; font-size: 11px; font-weight: 600; }
 .stage6-validation-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 9px; }
 .stage6-validation-card { min-width: 0; padding: 10px; border: 1px solid rgba(159, 178, 205, .12); border-radius: 6px; background: rgba(21, 35, 52, .55); }
 .stage6-validation-card h3 { margin: 0 0 7px; color: #abb9ca; font-size: 10px; font-weight: 500; overflow-wrap: anywhere; }
