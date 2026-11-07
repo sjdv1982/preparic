@@ -216,16 +216,44 @@ red or blocked from its worst kept candidate. A result implied by a broader
 filter is shown as implied, never as 0 %. A failing clipped candidate no
 longer affects its stacking; uncovering it restores its contribution.
 
-## Export (not implemented)
+## Export
 
-The export page is deferred. Alaric's `alaric/export_bundle.py` defines what
-it will receive and emit. Every selected stacking yields a Gaussian `anchor`
-action with its edited filter, and `anchor-refe` actions for each of its kept
-candidates. An `anchor-refe` action uses A4's computed base threshold. When
-that rounded value exceeds √3 Å, the action is written with `ovrmsd: -1` and a
-comment, as a deliberately disabled positive control. Grow thresholds come
-from the edited kept pairs, and the energy-threshold file from the edited
-values of the true kept matrix cells.
+Once stage 6 and its upstream results are current, Preparic offers **Download
+export ZIP**. The backend validates one snapshot of the decisions and computed
+results, then builds the DATA files, manifest and generator catalogue. A
+pending or failed producer, an invalid decision, or a hard admission block
+keeps the export unavailable. The state graph explains pending and failed
+producers; `export_admission` reports addressed decision blocks and warnings.
+
+The ZIP contains one `alaric_project/` folder. Its `DATA/` has the exact RNA
+reference and prepared range files, schema-1 constraints and energy
+thresholds, kept reference/best-fit fragments, and a manifest with the
+snapshot digest and generator inventory. The other folders catalogue
+alternative anchor, grow, merge and common-conformer gens for fixed and
+unfixed runs. They are not all one runnable project: select compatible gens,
+then move the chosen actions from their nested `gen-*` folders into the
+project root alongside `DATA/`. The catalogue itself is ignored by Alaric's
+project loader until those action directories are moved. Choose only one
+conflicting alternative for a pool name; the exporter does not choose merge
+locations or remove run-final dead ends. There is no bundled README.
+
+Some valid snapshots carry warnings when the nearest-to-native structure does
+not pass a filter. In that case, Preparic shows the reasons and the exact
+**“The nearest-to-native structure doesn't pass the filters. Proceed anyway”**
+checkbox. Acknowledgment applies only to that snapshot digest. The download
+request carries no consent flag, and the browser releases the ZIP only when
+the manifest digest still matches the click-time snapshot. Later edits mark a
+previous download stale.
+
+Gaussian `anchor` actions retain each selected stacking's current filter.
+`anchor-refe` actions use A4's computed base threshold for each unclipped
+candidate, deduplicated within its generator; an over-limit rounded value is
+written as `ovrmsd: -1` with a comment, as a deliberately disabled positive
+control. Kept edited pair thresholds populate `constraints.json`; the edited
+energy thresholds of true kept matrix cells populate
+`energy-thresholds.json`. Fixed-mode scoring applies the required range
+filters in a tandem AND chain; each unfixed range-rooted chain scores only
+against its own range.
 
 ## Files in `deployment-mounts/`
 
