@@ -70,6 +70,45 @@ _MARKER_KEYS = {
 }
 _NO_FALLBACK = object()
 
+EXPORT_INPUT_CELLTYPES = {
+    "pdbcode": "str",
+    "biounit": "plain",
+    "cif": "str",
+    "ranges": "plain",
+    "stacking_selection": "plain",
+    "threshold_edits": "plain",
+    "best_fit_clip": "plain",
+    "interaction_matrix": "plain",
+    "gaussian_classes": "plain",
+    "energy_threshold_edits": "plain",
+    "range_specs": "plain",
+    "structure_id": "plain",
+    "range_pdb_files": "folder",
+    "range_pdb_files_aa": "folder",
+    "rna_pdb": "bytes",
+    "fragments": "plain",
+    "best_fit_thresholds": "plain",
+    "best_fits": "plain",
+    "clipped_fragments": "folder",
+    "stackings": "plain",
+    "interactions": "plain",
+    "energetics": "plain",
+    "bestfit_stackings": "plain",
+    "gaussian_scores": "plain",
+    "gaussian_validation": "plain",
+    "gaussian_check": "plain",
+    "gaussian_model_json": "bytes",
+    "fraglib_identities": "str",
+    "exclude_pdb_code": "str",
+    "ring_refe_a": "bytes",
+    "ring_refe_c": "bytes",
+    "ring_refe_phe": "bytes",
+    "ring_refe_his": "bytes",
+    "ring_refe_arg": "bytes",
+    "ring_refe_trp": "bytes",
+    "range_pdbs_aa": "plain",
+}
+
 
 def _exact_keys(value: object, keys: set[str]) -> bool:
     return type(value) is dict and set(value) == keys
@@ -681,6 +720,121 @@ def _stage6_merge_gaussian_validation(
     )
 
 
+def _export_admission(
+    pdbcode, biounit, cif, ranges, stacking_selection, threshold_edits,
+    best_fit_clip, interaction_matrix, gaussian_classes, energy_threshold_edits,
+    range_specs, structure_id, range_pdb_files, range_pdb_files_aa, rna_pdb,
+    fragments, best_fit_thresholds, best_fits, clipped_fragments, stackings,
+    interactions, energetics, bestfit_stackings, gaussian_scores,
+    gaussian_validation, gaussian_check, gaussian_model_json,
+    fraglib_identities, exclude_pdb_code, ring_refe_a, ring_refe_c,
+    ring_refe_phe, ring_refe_his, ring_refe_arg, ring_refe_trp,
+    range_pdbs_aa, validated_pairs, validated_classes, validated_energies,
+):
+    """Build the shared readiness report from one explicit export input cut."""
+    import export_snapshot
+
+    return export_snapshot.build_admission({
+        "pdbcode": pdbcode,
+        "biounit": biounit,
+        "cif": cif,
+        "ranges": ranges,
+        "stacking_selection": stacking_selection,
+        "threshold_edits": threshold_edits,
+        "best_fit_clip": best_fit_clip,
+        "interaction_matrix": interaction_matrix,
+        "gaussian_classes": gaussian_classes,
+        "energy_threshold_edits": energy_threshold_edits,
+        "range_specs": range_specs,
+        "structure_id": structure_id,
+        "range_pdb_files": range_pdb_files,
+        "range_pdb_files_aa": range_pdb_files_aa,
+        "rna_pdb": rna_pdb,
+        "fragments": fragments,
+        "best_fit_thresholds": best_fit_thresholds,
+        "best_fits": best_fits,
+        "clipped_fragments": clipped_fragments,
+        "stackings": stackings,
+        "interactions": interactions,
+        "energetics": energetics,
+        "bestfit_stackings": bestfit_stackings,
+        "gaussian_scores": gaussian_scores,
+        "gaussian_validation": gaussian_validation,
+        "gaussian_check": gaussian_check,
+        "gaussian_model_json": gaussian_model_json,
+        "fraglib_identities": fraglib_identities,
+        "exclude_pdb_code": exclude_pdb_code,
+        "ring_refe_a": ring_refe_a,
+        "ring_refe_c": ring_refe_c,
+        "ring_refe_phe": ring_refe_phe,
+        "ring_refe_his": ring_refe_his,
+        "ring_refe_arg": ring_refe_arg,
+        "ring_refe_trp": ring_refe_trp,
+        "range_pdbs_aa": range_pdbs_aa,
+        "validated_pairs": validated_pairs,
+        "validated_classes": validated_classes,
+        "validated_energies": validated_energies,
+    })
+
+
+def _export_tree(
+    pdbcode, biounit, cif, ranges, stacking_selection, threshold_edits,
+    best_fit_clip, interaction_matrix, gaussian_classes, energy_threshold_edits,
+    range_specs, structure_id, range_pdb_files, range_pdb_files_aa, rna_pdb,
+    fragments, best_fit_thresholds, best_fits, clipped_fragments, stackings,
+    interactions, energetics, bestfit_stackings, gaussian_scores,
+    gaussian_validation, gaussian_check, gaussian_model_json,
+    fraglib_identities, exclude_pdb_code, ring_refe_a, ring_refe_c,
+    ring_refe_phe, ring_refe_his, ring_refe_arg, ring_refe_trp,
+    range_pdbs_aa, admission, validated_pairs, validated_classes,
+    validated_energies,
+):
+    """Build the private folder result for Seamless-owned ZIP packing."""
+    import export_tree
+
+    return export_tree.build_tree({
+        "pdbcode": pdbcode,
+        "biounit": biounit,
+        "cif": cif,
+        "ranges": ranges,
+        "stacking_selection": stacking_selection,
+        "threshold_edits": threshold_edits,
+        "best_fit_clip": best_fit_clip,
+        "interaction_matrix": interaction_matrix,
+        "gaussian_classes": gaussian_classes,
+        "energy_threshold_edits": energy_threshold_edits,
+        "range_specs": range_specs,
+        "structure_id": structure_id,
+        "range_pdb_files": range_pdb_files,
+        "range_pdb_files_aa": range_pdb_files_aa,
+        "rna_pdb": rna_pdb,
+        "fragments": fragments,
+        "best_fit_thresholds": best_fit_thresholds,
+        "best_fits": best_fits,
+        "clipped_fragments": clipped_fragments,
+        "stackings": stackings,
+        "interactions": interactions,
+        "energetics": energetics,
+        "bestfit_stackings": bestfit_stackings,
+        "gaussian_scores": gaussian_scores,
+        "gaussian_validation": gaussian_validation,
+        "gaussian_check": gaussian_check,
+        "gaussian_model_json": gaussian_model_json,
+        "fraglib_identities": fraglib_identities,
+        "exclude_pdb_code": exclude_pdb_code,
+        "ring_refe_a": ring_refe_a,
+        "ring_refe_c": ring_refe_c,
+        "ring_refe_phe": ring_refe_phe,
+        "ring_refe_his": ring_refe_his,
+        "ring_refe_arg": ring_refe_arg,
+        "ring_refe_trp": ring_refe_trp,
+        "range_pdbs_aa": range_pdbs_aa,
+        "validated_pairs": validated_pairs,
+        "validated_classes": validated_classes,
+        "validated_energies": validated_energies,
+    }, admission)
+
+
 def _stage6_gaussian_scores(
     bestfit_stackings: object, reference_stackings: object, selection: object,
     clip: object, fragments: object, model_json: object,
@@ -1180,6 +1334,72 @@ def build_context() -> Context:
         context.merge_gaussian_validation.celltypes.class_validation = "plain"
         context.merge_gaussian_validation.celltypes.result = "plain"
         context.gaussian_validation = context.merge_gaussian_validation.result
+
+        # Export uses the same explicit source-cell inventory for both nodes.
+        # The helper modules are attached as source, so worker execution does
+        # not depend on importing Preparic or Alaric from an installed tree.
+        export_snapshot_module = {
+            "type": "interpreted",
+            "language": "python",
+            "code": (PROJECT_ROOT / "export_snapshot.py").read_text(encoding="utf-8"),
+        }
+        export_gens_module = {
+            "type": "interpreted",
+            "language": "python",
+            "code": (PROJECT_ROOT / "export_gens.py").read_text(encoding="utf-8"),
+        }
+        export_tree_module = {
+            "type": "interpreted",
+            "language": "python",
+            "code": (PROJECT_ROOT / "export_tree.py").read_text(encoding="utf-8"),
+        }
+        export_helper_modules = {
+            "export_snapshot": export_snapshot_module,
+            "preparic_stage4": stage4_module,
+            "preparic_stage5": stage5_module,
+            "preparic_stage6": stage6_module,
+            "alaric_gaussian_filter": gaussian_filter_module,
+        }
+
+        context.export_admission_transformer = _export_admission
+        for name, module in export_helper_modules.items():
+            context.export_admission_transformer.modules[name] = module
+        for pin, celltype in EXPORT_INPUT_CELLTYPES.items():
+            context.export_admission_transformer.pins[pin] = getattr(context, pin)
+            context.export_admission_transformer.celltypes[pin] = celltype
+        context.export_admission_transformer.pins.validated_pairs = context.validate_threshold_edits.result
+        context.export_admission_transformer.pins.validated_classes = context.validate_gaussian_classes.result
+        context.export_admission_transformer.pins.validated_energies = context.validate_energy_threshold_edits.result
+        context.export_admission_transformer.celltypes.validated_pairs = "plain"
+        context.export_admission_transformer.celltypes.validated_classes = "plain"
+        context.export_admission_transformer.celltypes.validated_energies = "plain"
+        context.export_admission_transformer.celltypes.result = "plain"
+        context.export_admission = context.export_admission_transformer.result
+        context.export_admission.share(readonly=True)
+
+        context.export_tree_transformer = _export_tree
+        for name, module in {
+            **export_helper_modules,
+            "export_gens": export_gens_module,
+            "export_tree": export_tree_module,
+        }.items():
+            context.export_tree_transformer.modules[name] = module
+        for pin, celltype in EXPORT_INPUT_CELLTYPES.items():
+            context.export_tree_transformer.pins[pin] = getattr(context, pin)
+            context.export_tree_transformer.celltypes[pin] = celltype
+        context.export_tree_transformer.pins.admission = context.export_admission
+        context.export_tree_transformer.celltypes.admission = "plain"
+        context.export_tree_transformer.pins.validated_pairs = context.validate_threshold_edits.result
+        context.export_tree_transformer.pins.validated_classes = context.validate_gaussian_classes.result
+        context.export_tree_transformer.pins.validated_energies = context.validate_energy_threshold_edits.result
+        context.export_tree_transformer.celltypes.validated_pairs = "plain"
+        context.export_tree_transformer.celltypes.validated_classes = "plain"
+        context.export_tree_transformer.celltypes.validated_energies = "plain"
+        context.export_tree_transformer.celltypes.result = "folder"
+        context.export_tree = context.export_tree_transformer.result
+        context.shares.add_download(
+            {"alaric_project": "export_tree"}, path="export.zip", format="zip"
+        )
 
         context.pdbcode.share(readonly=False)
         context.biounit.share(readonly=False)

@@ -8,6 +8,7 @@ to the live E5/E7 checks; a direct share-server URL does not prove the proxy.
 
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import importlib.util
 import io
 import json
 from pathlib import Path
@@ -69,6 +70,32 @@ def _expected(decision):
 def _members(response):
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
         return {name: archive.read(name) for name in archive.namelist()}
+
+
+def _json_differences(actual, expected, prefix=""):
+    if isinstance(actual, dict) and isinstance(expected, dict):
+        differences = {}
+        for key in sorted(set(actual) | set(expected)):
+            path = f"{prefix}.{key}" if prefix else key
+            if key not in actual:
+                differences[path] = {"actual": "<missing>", "expected": expected[key]}
+            elif key not in expected:
+                differences[path] = {"actual": actual[key], "expected": "<missing>"}
+            else:
+                differences.update(_json_differences(actual[key], expected[key], path))
+        return differences
+    if isinstance(actual, list) and isinstance(expected, list):
+        differences = {}
+        for index in range(max(len(actual), len(expected))):
+            path = f"{prefix}[{index}]"
+            if index >= len(actual):
+                differences[path] = {"actual": "<missing>", "expected": expected[index]}
+            elif index >= len(expected):
+                differences[path] = {"actual": actual[index], "expected": "<missing>"}
+            else:
+                differences.update(_json_differences(actual[index], expected[index], path))
+        return differences
+    return {} if actual == expected else {prefix: {"actual": actual, "expected": expected}}
 
 
 def _get(url):
@@ -299,6 +326,173 @@ def _restart_probe(decision_file):
         context.close()
         shareserver.close()
         seamless.close()
+
+
+def _close_preparic_context_without_closing_runtime(backend, context):
+    stop = backend._STAGE5_RANGE_SYNC_STOP
+    thread = backend._STAGE5_RANGE_SYNC_THREAD
+    if stop is not None:
+        stop.set()
+    if thread is not None:
+        thread.join(timeout=2)
+    backend._STAGE5_RANGE_SYNC_STOP = None
+    backend._STAGE5_RANGE_SYNC_THREAD = None
+    context.close()
+    if backend.ctx is context:
+        backend.ctx = None
+
+
+@pytest.mark.integration
+def test_e5_attached_export_wrappers_run_and_download_their_exact_folder(tmp_path, monkeypatch,
+                                                                          seamless_runtime):
+    """Run the real wrappers with attached source on the configured worker pool."""
+    from seamless import Buffer, Cell
+    from seamless_workflow import shareserver
+
+    import backend
+    import export_tree
+    from test_export_snapshot import _inputs
+
+    # Reuse the schema-1 input fixture from E2, but connect it to the actual
+    # wrappers built by build_context(). This exercises their attached modules
+    # on the configured workers and avoids computing unrelated producers.
+    inputs = _inputs()
+    model_bytes = (backend.resolve_alaric_dir() / "gaussian_stacking_filter.json").read_bytes()
+    model = json.loads(model_bytes)
+    inputs["gaussian_model_json"] = model_bytes
+    model_names = list(model["thresholds"])
+    for name in ("gaussian_scores", "gaussian_validation", "gaussian_check"):
+        inputs[name]["filter_set_version"] = model["filter_set_version"]
+    inputs["gaussian_scores"]["filter_names"] = model_names
+    inputs["gaussian_validation"]["filter_names"] = model_names
+
+    # Install the same local helper names that the worker receives as
+    # interpreted modules, so the parent-side tree oracle uses the same
+    # production validators and Gaussian model.
+    import stage4 as preparic_stage4
+    import stage5 as preparic_stage5
+    import stage6 as preparic_stage6
+
+    filter_spec = importlib.util.spec_from_file_location(
+        "alaric_gaussian_filter", backend.resolve_alaric_dir() / "gaussian_filter.py"
+    )
+    gaussian_filter = importlib.util.module_from_spec(filter_spec)
+    filter_spec.loader.exec_module(gaussian_filter)
+    for name, module in (
+        ("preparic_stage4", preparic_stage4),
+        ("preparic_stage5", preparic_stage5),
+        ("preparic_stage6", preparic_stage6),
+        ("alaric_gaussian_filter", gaussian_filter),
+    ):
+        monkeypatch.setitem(sys.modules, name, module)
+
+    old_mount = backend.MOUNT_DIRECTORY
+    for name, value in tuple(vars(backend).items()):
+        if isinstance(value, Path) and value.parent == old_mount:
+            monkeypatch.setattr(backend, name, tmp_path / value.name)
+    monkeypatch.setattr(backend, "MOUNT_DIRECTORY", tmp_path)
+    monkeypatch.setenv("SEAMLESS_SHARE_HOST", "127.0.0.1")
+    monkeypatch.setenv("SEAMLESS_SHARE_PORT", "0")
+    shareserver.close()
+
+    context = backend.build_context()
+    buffers = []
+    cells = {}
+    try:
+        for pin, celltype in backend.EXPORT_INPUT_CELLTYPES.items():
+            cell = Cell(celltype=celltype)
+            value = inputs[pin]
+            if celltype == "folder":
+                folder = {}
+                for path, content in value.items():
+                    buffer = Buffer(content)
+                    buffers.append(buffer)
+                    folder[path] = buffer.get_checksum()
+                value = folder
+            cell.set(value)
+            setattr(context, f"e5_export_input_{pin}", cell)
+            cells[pin] = cell
+            context.export_admission_transformer.pins[pin] = cell
+            context.export_tree_transformer.pins[pin] = cell
+
+        # Successful validators return None. Use completed plain cells here;
+        # the separate wiring test checks that production pins source the
+        # corresponding validator results.
+        for pin in ("validated_pairs", "validated_classes", "validated_energies"):
+            cell = Cell(celltype="plain")
+            cell.set(None)
+            setattr(context, f"e5_export_{pin}", cell)
+            context.export_admission_transformer.pins[pin] = cell
+            context.export_tree_transformer.pins[pin] = cell
+
+        assert backend.configure_local_execution() == 8
+        context.export_admission.compute(timeout=120)
+        assert context.export_admission.state == "complete", context.export_admission.exception
+        admission = context.export_admission.value
+        assert admission["ready"] is True, admission
+        tree_compute_error = None
+        try:
+            context.export_tree.compute(timeout=120)
+        except Exception as exc:
+            tree_compute_error = repr(exc)
+        assert context.export_tree.state == "complete", {
+            "cell_state": context.export_tree.state,
+            "transformer_state": context.export_tree_transformer.state,
+            "transformer_exception": repr(context.export_tree_transformer.exception),
+            "compute_error": tree_compute_error,
+        }
+        assert admission["blocks"] == []
+        expected_tree = export_tree.build_tree(inputs, admission)
+
+        url = context.shares.url.rstrip("/") + "/export.zip"
+        response = _get(url)
+        assert response.status_code == 200, response.text
+        assert response.headers["Content-Type"] == "application/zip"
+        assert response.headers["Content-Disposition"] == 'attachment; filename="export.zip"'
+        actual_tree = _members(response)
+        expected_tree_with_prefix = {
+            "alaric_project/" + path: content
+            for path, content in expected_tree.items()
+        }
+        actual_manifest = json.loads(actual_tree["alaric_project/DATA/export-manifest.json"])
+        expected_manifest = json.loads(
+            expected_tree_with_prefix["alaric_project/DATA/export-manifest.json"]
+        )
+        manifest_diff = _json_differences(actual_manifest, expected_manifest)
+        assert actual_tree == expected_tree_with_prefix, {
+            "different_members": sorted(
+                path for path in set(actual_tree) | set(expected_tree_with_prefix)
+                if actual_tree.get(path) != expected_tree_with_prefix.get(path)
+            ),
+            "manifest_differences": manifest_diff,
+            "actual_snapshot_sha256": actual_manifest.get("snapshot_sha256"),
+            "expected_snapshot_sha256": expected_manifest.get("snapshot_sha256"),
+        }
+        assert actual_tree["alaric_project/DATA/reference.pdb"] == inputs["rna_pdb"]
+        for path, content in inputs["range_pdb_files_aa"].items():
+            assert actual_tree["alaric_project/DATA/" + path] == content
+
+        # A complete but semantically refused admission must never turn into
+        # a successful empty download. The tree raises its expected refusal.
+        blocked_classes = dict(inputs["gaussian_classes"])
+        blocked_classes["active"] = False
+        blocked_classes["rows"] = []
+        cells["gaussian_classes"].set(blocked_classes)
+        context.export_admission.compute(timeout=120)
+        assert context.export_admission.value["ready"] is False
+        try:
+            context.export_tree.compute(timeout=120)
+        except Exception:
+            pass
+        assert context.export_tree_transformer.state == "failed"
+        assert context.export_tree.state == "blocked"
+        assert "ExportNotReady" in str(context.export_tree_transformer.exception)
+        refused = _get(url)
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["cells"]["export_tree"] == "blocked"
+    finally:
+        _close_preparic_context_without_closing_runtime(backend, context)
+        shareserver.close()
 
 
 if __name__ == "__main__":

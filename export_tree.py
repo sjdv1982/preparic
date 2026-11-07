@@ -28,7 +28,7 @@ _FRAGMENT_KEY = re.compile(r"frag-([1-9][0-9]*)-([A-Z]{2})\Z")
 
 def _json_bytes(value: Any) -> bytes:
     """Serialize a JSON document deterministically as UTF-8 with one newline."""
-    return (json.dumps(value, ensure_ascii=False, allow_nan=False, indent=2) + "\n").encode("utf-8")
+    return (json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False, indent=2) + "\n").encode("utf-8")
 
 
 def _yaml_bytes(value: dict, comments: list[str] | None = None) -> bytes:
@@ -505,3 +505,27 @@ def render_tree(snapshot: Any, recipes: Any, digest: Any) -> dict[str, bytes]:
     _add_member(tree, "DATA/export-manifest.json", _json_bytes(manifest))
     _validate_member_tree(tree)
     return {key: tree[key] for key in sorted(tree)}
+
+
+
+def build_tree(inputs: Any, admission: Any) -> dict[str, bytes]:
+    """Rebuild the admitted snapshot and render its checked folder mapping."""
+    snapshot, blocks = export_snapshot.normalise_export_inputs(inputs)
+    if snapshot is None or blocks:
+        raise export_snapshot.ExportNotReady(
+            "The current export inputs do not produce an admissible snapshot."
+        )
+
+    digest = export_snapshot.snapshot_digest(snapshot)
+    if type(admission) is not dict or admission.get("schema") != 1 \
+            or admission.get("ready") is not True or admission.get("blocks") != []:
+        raise export_snapshot.ExportNotReady(
+            "The current export admission is not ready."
+        )
+    if admission.get("digest") != digest:
+        raise export_snapshot.ExportNotReady(
+            "The export snapshot no longer matches its admission digest."
+        )
+
+    recipes = export_gens.plan_gens(snapshot)
+    return render_tree(snapshot, recipes, digest)
