@@ -550,6 +550,9 @@ def _gen_path(kind: str, direction: str | None, mode: str, root_range: str | Non
         label = f"gen-frag{number_or_bounds[0]}-{number_or_bounds[1]}"
     else:
         label = f"gen-frag{number_or_bounds}"
+        if kind == "merge":
+            # Named after the final pool the gen generates (`fragN-merged`).
+            label += "-merged"
     parts.append(label)
     return "/".join(parts)
 
@@ -643,12 +646,12 @@ def _anchor_recipes(snapshot: dict, classification: dict, mode: str, root_range:
                     items = run["by_frag"].get(fragment_number, [])
                     # One candidate endpoint for an outer fragment; two for
                     # an inner fragment.  Naming uses the anchored nucleotide
-                    # ordinal (`from-N`), not its local first/second index.
+                    # ordinal (`from-nucN`), not its local first/second index.
                     ords = sorted({item["lock"]["ordinal"] for item in items})
                     for ordinal in ords:
                         candidate_items = [item for item in items if item["lock"]["ordinal"] == ordinal]
                         if fragment_number in inner_fragments:
-                            step = f"from-{ordinal}"
+                            step = f"from-nuc{ordinal}"
                         else:
                             step = "raw"
                         raw, count, _ = _raw_anchor_pools(
@@ -994,13 +997,12 @@ def _merge_recipes(snapshot: dict, classification: dict, mode: str, root_range: 
                     left_is_anchor = target == right_run["left"]
                     gaussian_count = _anchor_constraint_count(
                         snapshot, right_run, target, mode, root_range, "anchor") if left_is_anchor else 0
-                    reference_count = _anchor_constraint_count(
-                        snapshot, right_run, target, mode, root_range, "anchor-refe") if left_is_anchor else 0
-                    if left_is_anchor and (gaussian_count == 1) != (reference_count == 1):
-                        variants = [("anchor", gaussian_count), ("anchor-refe", reference_count)]
-                    else:
-                        variants = [(None, gaussian_count)]
-                    for source_tree, count in variants:
+                    # A single Gaussian anchor pool is too large to serve as
+                    # `restrict_input` (R12).  The reference tree's pool is
+                    # small, so its merge keeps `restrict_input`.
+                    variants = [("anchor", True), ("anchor-refe", False)] \
+                        if left_is_anchor and gaussian_count == 1 else [(None, False)]
+                    for source_tree, unrestricted in variants:
                         path = _gen_path("merge", direction, mode, root_range, target,
                                          has_single_range=one_range,
                                          branch_ranges=(branch_ranges.get(("merge", direction), set())
@@ -1010,14 +1012,13 @@ def _merge_recipes(snapshot: dict, classification: dict, mode: str, root_range: 
                         local_outputs = set()
                         final = _merged_pool(target, range_for_frag, mode, root_range)
                         grown = _intermediate(target, "merged", "grown", range_for_frag, mode, root_range)
-                        if left_is_anchor and count == 1:
-                            _append_action(recipe, _action(grown, _grow_params(snapshot, target, "fwd", input_pool)),
-                                           grown, local_outputs)
-                            _intersect(recipe, grown, restrict_pool, final, local_outputs)
-                        else:
-                            _append_action(recipe, _action(final, _grow_params(snapshot, target, "fwd",
-                                                                                input_pool, restrict_pool)),
-                                           final, local_outputs)
+                        # The grow result must always undergo an `identity` with
+                        # its restricting pool before chains can be built on it.
+                        restrict_input = None if unrestricted else restrict_pool
+                        _append_action(recipe, _action(grown, _grow_params(snapshot, target, "fwd",
+                                                                            input_pool, restrict_input)),
+                                       grown, local_outputs)
+                        _intersect(recipe, grown, restrict_pool, final, local_outputs)
                         recipe["final_pools"] = [final]
                         _finalize_recipe(recipe, snapshot, local_outputs)
                         result.append(recipe)
@@ -1029,13 +1030,12 @@ def _merge_recipes(snapshot: dict, classification: dict, mode: str, root_range: 
                     left_is_anchor = target == left_run["right"]
                     gaussian_count = _anchor_constraint_count(
                         snapshot, left_run, target, mode, root_range, "anchor") if left_is_anchor else 0
-                    reference_count = _anchor_constraint_count(
-                        snapshot, left_run, target, mode, root_range, "anchor-refe") if left_is_anchor else 0
-                    if left_is_anchor and (gaussian_count == 1) != (reference_count == 1):
-                        variants = [("anchor", gaussian_count), ("anchor-refe", reference_count)]
-                    else:
-                        variants = [(None, gaussian_count)]
-                    for source_tree, count in variants:
+                    # A single Gaussian anchor pool is too large to serve as
+                    # `restrict_input` (R12).  The reference tree's pool is
+                    # small, so its merge keeps `restrict_input`.
+                    variants = [("anchor", True), ("anchor-refe", False)] \
+                        if left_is_anchor and gaussian_count == 1 else [(None, False)]
+                    for source_tree, unrestricted in variants:
                         path = _gen_path("merge", direction, mode, root_range, target,
                                          has_single_range=one_range,
                                          branch_ranges=(branch_ranges.get(("merge", direction), set())
@@ -1045,14 +1045,13 @@ def _merge_recipes(snapshot: dict, classification: dict, mode: str, root_range: 
                         local_outputs = set()
                         final = _merged_pool(target, range_for_frag, mode, root_range)
                         grown = _intermediate(target, "merged", "grown", range_for_frag, mode, root_range)
-                        if left_is_anchor and count == 1:
-                            _append_action(recipe, _action(grown, _grow_params(snapshot, target, "bwd", input_pool)),
-                                           grown, local_outputs)
-                            _intersect(recipe, grown, restrict_pool, final, local_outputs)
-                        else:
-                            _append_action(recipe, _action(final, _grow_params(snapshot, target, "bwd",
-                                                                                input_pool, restrict_pool)),
-                                           final, local_outputs)
+                        # The grow result must always undergo an `identity` with
+                        # its restricting pool before chains can be built on it.
+                        restrict_input = None if unrestricted else restrict_pool
+                        _append_action(recipe, _action(grown, _grow_params(snapshot, target, "bwd",
+                                                                            input_pool, restrict_input)),
+                                       grown, local_outputs)
+                        _intersect(recipe, grown, restrict_pool, final, local_outputs)
                         recipe["final_pools"] = [final]
                         _finalize_recipe(recipe, snapshot, local_outputs)
                         result.append(recipe)
