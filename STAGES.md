@@ -175,9 +175,12 @@ Recompute. A clip edit that races Continue makes the result invalid and the
 project stays in stage 4.
 
 **Energy thresholds** form a second editable table, one value per fragment and
-protein range. It opens empty, with the computed values (A6: the best-fit
-energy rounded to the smallest multiple of 0.01 strictly above it) shown
-beside it. Copy fills it while those are fresh, asking before it overwrites.
+protein range. It opens empty, with the computed values shown beside it: the
+smallest multiple of 0.01 strictly above the best-fit energy plus 0.05 (A6
+rounding plus 0.05), so each lies more than 0.05 and at most 0.06 above that
+energy. The margin absorbs the effect of 0.001 Å coordinate precision, which
+can move a best fit on a steep repulsive contact by several thousandths.
+Copy fills it while those are fresh, asking before it overwrites.
 Values have either sign and at most two decimals. The table is editable in
 stage 5 only; stage 6 may show its saved and computed values read-only.
 Changing one protein range resets only that range's values; a change of PDB

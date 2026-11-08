@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 import json
 import math
 import re
@@ -10,6 +11,25 @@ from typing import Any
 
 _FRAGMENT_KEY = re.compile(r"^frag-([1-9][0-9]*)-([ACGU]{2})$")
 _ENERGY_VALUE = re.compile(r"^[+-]?(?:0|[1-9][0-9]*)(?:\.[0-9]{1,2})?$")
+# A computed energy threshold lies more than 0.05 and at most 0.06 above the
+# scored best-fit energy. Best fits and receptors are both scored from
+# coordinates given to 0.001 A; when a bead sits on the steep repulsive wall,
+# that rounding alone moves the energy by several thousandths, which can push
+# the best fit above a threshold placed just 0.01 or less above its energy.
+ENERGY_THRESHOLD_MARGIN = Decimal("0.05")
+
+
+def computed_energy_threshold(energy: float, round_energy: Any) -> str:
+    """Return the smallest two-decimal value strictly above ``energy + 0.05``.
+
+    ``round_energy`` is Alaric's pinned A6 rounding (the smallest two-decimal
+    value strictly above its argument). The margin is a whole number of cents,
+    so adding it after that rounding is exact and yields the same value as
+    rounding ``energy + 0.05``, without any binary floating-point addition.
+    """
+    threshold = Decimal(round_energy(float(energy))) + ENERGY_THRESHOLD_MARGIN
+    text = f"{threshold.quantize(Decimal('0.01')):f}"
+    return "0.00" if text == "-0.00" else text
 
 
 def _fragment_rows(fragments: object) -> list[dict]:
@@ -155,7 +175,9 @@ def energy_thresholds(energetics: object, best_fits: object, energy_threshold_mo
                 continue
             if type(energy) not in (int, float) or not math.isfinite(energy):
                 raise ValueError(f"Best-fit energy for {row['key']} / {range_id} is invalid.")
-            values.setdefault(row["key"], {})[range_id] = round_energy(float(energy))
+            values.setdefault(row["key"], {})[range_id] = computed_energy_threshold(
+                float(energy), round_energy
+            )
     return {"schema": 1, "echo": energetics["echo"], "values": values}
 
 
