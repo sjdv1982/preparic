@@ -178,10 +178,12 @@ project stays in stage 4.
 protein range. It opens empty, with the computed values (A6: the best-fit
 energy rounded to the smallest multiple of 0.01 strictly above it) shown
 beside it. Copy fills it while those are fresh, asking before it overwrites.
-Values have either sign and at most two decimals. The table stays editable in
-stages 5 and 6. Changing one protein range resets only that range's values; a
-change of PDB code or RNA range empties the table. Editing it reruns only its
-validator (T27); editing the matrix reruns only the interaction hand-off (T15).
+Values have either sign and at most two decimals. The table is editable in
+stage 5 only; stage 6 may show its saved and computed values read-only.
+Changing one protein range resets only that range's values; a change of PDB
+code or RNA range empties the table. Editing it reruns only its validator
+(T27); editing the matrix reruns only the interaction hand-off (T15). Stage 5
+does not show the S11 pair-threshold table.
 
 **Continue 5→6** needs the matrix to pass read validation against fresh
 energetics, a fresh fit and the current clip; fresh best-fit stacking
@@ -205,9 +207,12 @@ the tilt30 and disp45 prefilters are proposed when every kept candidate has
 information only. A clipped candidate contributes nothing.
 
 The class table holds one editable row per selected stacking, with Copy,
-per-row revert and difference marks, and writes debounced by 500 ms. A model
-or fit change updates the computed values and the marks, never the user's
-classes.
+per-row revert and difference marks, and writes debounced by 500 ms. It is the
+only editable decision in stage 6. S11 pair thresholds may appear as a
+read-only comparison, and S24 energy thresholds may appear read-only; neither
+has inputs or Copy/Revert controls there. A model or fit change updates the
+computed values and the marks, never the user's classes. Stage 4 remains the
+only stage where S11 can be edited.
 
 **Validation.** The backend runs Alaric's all-filter check (A9, T21) once for
 every kept candidate against all twelve filters. Class edits do not rerun

@@ -27,7 +27,7 @@ function matrix(rows = keys): any {
 }
 function energetics(): any {
   return { schema: 1, ranges: ranges.map((range, index) => ({ range, row: rangeRows[index + 1],
-    rows: keys.map(key => ({ key, reference: { energy: 2, error: null }, bestfit: { energy: -1, error: null } })) })) };
+    rows: keys.map(key => ({ key, reference: { energy: 3, error: null }, bestfit: { energy: -1, error: null } })) })) };
 }
 function gateFixture(): { snapshot: any; state: any } {
   const value = matrix();
@@ -135,8 +135,8 @@ describe('W5 M6 clip adaptation', () => {
     });
     const energy = energetics();
     energy.ranges.forEach((range: any) => range.rows.forEach((row: any) => {
-      row.reference.energy = 2;
-      row.bestfit.energy = 2;
+      row.reference.energy = 3;
+      row.bestfit.energy = 3;
     }));
     const oldInner = structuredClone(old.grid.slice(1, 4));
     const shiftedRows = keys.slice(1, 6); // adds frag-2, drops frag-7
@@ -154,8 +154,8 @@ describe('W5 M6 clip adaptation', () => {
     old.grid.slice(1, -1).forEach((row: boolean[]) => { row[1] = true; });
     const energy = energetics();
     if (stop !== 'high') {
-      energy.ranges[0].rows[1].reference = { energy: stop === 'low' ? .5 : null, error: stop === 'error' ? 'bad ligand' : null };
-      energy.ranges[0].rows[1].bestfit = { energy: .5, error: null };
+      energy.ranges[0].rows[1].reference = { energy: stop === 'low' ? 2.999 : null, error: stop === 'error' ? 'bad ligand' : null };
+      energy.ranges[0].rows[1].bestfit = { energy: 2.999, error: null };
     }
     const before = structuredClone(old);
     const result = adaptInteractionMatrix(old, keys, anchors, energy)!;
@@ -443,11 +443,12 @@ describe('W4/W5 integrated contract wiring', () => {
     const stage5 = source('src/components/Stage5Energetics.svelte');
     expect(stage5).toContain('cloneStage5Decision');
     expect(stage5).not.toContain('structuredClone(');
-    expect(stage5).toContain('aria-label="Interaction matrix by protein range"');
-    expect(stage5).toContain('aria-label={`Protein range ${rangeId}`}');
+    expect(stage5).toContain('aria-label="ATTRACT scores, thresholds, and interaction matrix by protein range"');
+    expect(stage5).toContain('aria-label={`Show ${rangeId}, chain ${proteinRange.chain} ${proteinRange.start} to ${proteinRange.end}`}');
+    expect(stage5).toContain('Range {item.index + 2} · chain {item.row.chain}');
     expect(stage5).toContain('Anchor {anchor.resid}:');
     expect(stage5).toContain('lock.fragment} (nt ${lock.nucleotide})');
-    expect(stage5).toContain('Join anchor ${anchor.resid} to anchor ${nextAnchor.resid} in ${rangeId}');
+    expect(stage5).toContain('Join anchor ${anchor.resid} to anchor ${nextAnchor.resid} in ${item.rangeId}');
     expect(stage5).not.toContain('aria-label="Per-anchor interaction selections"');
   });
 
@@ -476,17 +477,15 @@ describe('W4/W5 integrated contract wiring', () => {
     expect(stage4).toContain('validClip(clip, fragmentCount)');
   });
 
-  it('test_stage5_keeps_rmsd_threshold_table_editable', () => {
-    const app = source('src/App.svelte');
+  it('Stage 5 keeps S24 editable and omits the S11 RMSD editor', () => {
     const stage5 = source('src/components/Stage5Energetics.svelte');
     const importedChildren = [...stage5.matchAll(/import\s+(\w+)\s+from\s+['"](.+\.svelte)['"]/g)]
       .filter(match => new RegExp(`<${match[1]}[\\s/>]`).test(stage5))
       .map(match => readFileSync(resolve(process.cwd(), 'src/components', match[2]), 'utf8'));
     const editor = [stage5, ...importedChildren].join('\n');
-    expect(app).toContain('appState.stage === 5');
-    expect(editor).toMatch(/nuc1_ovrmsd|crmsd|ovrmsd/);
-    expect(editor).toMatch(/RMSD/i);
-    expect(editor).toMatch(/<input[\s\S]*(?:nuc1_ovrmsd|RMSD)/i);
+    expect(editor).toContain('energy threshold');
+    expect(editor).toMatch(/<input[^>]*energy threshold/i);
+    expect(editor).not.toMatch(/nuc1_ovrmsd|crmsd|ovrmsd|Overlap cRMSD threshold|Overlap ovRMSD threshold/i);
   });
 
   it('test_stage5_displays_computed_energy_threshold_beside_edit', () => {

@@ -5,7 +5,6 @@
     seamlessState,
     backendUrl,
     deactivateProjectDecisionAndWait,
-    setEnergyThresholdEdits,
     setProjectDecisionDebounced,
   } from '../lib/seamless.svelte';
   import {
@@ -22,7 +21,7 @@
     transferExport,
     type ExportRequest,
   } from '../lib/export-download';
-  import { cloneStage5Decision, stage5Rows, validEnergyEdit, type Stage5S24, type Stage5Range } from '../lib/stage5';
+  import { cloneStage5Decision, stage5Rows, type Stage5S24, type Stage5Range } from '../lib/stage5';
   import {
     editableGaussianRows,
     automaticGaussianPrefilters,
@@ -221,54 +220,6 @@
     if (!thresholdsFresh || !isRecord(computedThresholds) || !isRecord(computedThresholds.values)) return null;
     const value = computedThresholds.values[fragment]?.[rangeIdFor(row)];
     return typeof value === 'string' ? value : null;
-  }
-
-  function saveEnergyEdits(next: Stage5S24): void {
-    if (!setEnergyThresholdEdits(next)) {
-      message = 'The shared energy-threshold table rejected this edit.';
-      return;
-    }
-    energyEdits = cloneStage5Decision(next);
-    message = '';
-  }
-
-  function editEnergy(row: Stage5Range, fragment: string, raw: string): void {
-    if (!energyEdits || !canEdit) return;
-    const value = raw.trim() === '' ? null : raw.trim();
-    if (value !== null && !validEnergyEdit(value)) {
-      message = 'Enter a finite signed energy threshold with at most two decimal places.';
-      return;
-    }
-    const next = cloneStage5Decision(energyEdits);
-    const entry = next.ranges.find(item => sameAddress(item.row, row));
-    if (!entry) return;
-    entry.values[fragment] = value;
-    saveEnergyEdits(next);
-  }
-
-  function revertEnergy(row: Stage5Range, fragment: string): void {
-    const value = computedValue(row, fragment);
-    if (!energyEdits || value === null) return;
-    const next = cloneStage5Decision(energyEdits);
-    const entry = next.ranges.find(item => sameAddress(item.row, row));
-    if (!entry) return;
-    entry.values[fragment] = value;
-    saveEnergyEdits(next);
-  }
-
-  function copyEnergyThresholds(): void {
-    if (!energyEdits || !thresholdsFresh || !isRecord(computedThresholds) || !isRecord(computedThresholds.values)) return;
-    const hasValues = energyEdits.ranges.some(entry => Object.values(entry.values).some(value => value !== null));
-    if (hasValues && !window.confirm('Replace the current energy-threshold edits with the computed values?')) return;
-    const next = cloneStage5Decision(energyEdits);
-    for (const entry of next.ranges) {
-      const rangeId = rangeIdFor(entry.row);
-      for (const fragment of Object.keys(entry.values)) {
-        const computed = computedThresholds.values[fragment]?.[rangeId];
-        entry.values[fragment] = typeof computed === 'string' ? computed : null;
-      }
-    }
-    saveEnergyEdits(next);
   }
 
   function rowEnergy(range: string, key: string, kind: 'reference' | 'bestfit'): any {
@@ -526,15 +477,14 @@
     </div>
   </section>
 
-  <Stage4BestFits embedded={true} onBack={leaveStageAndCancel} onContinue={async () => false} />
+  <Stage4BestFits embedded={true} readOnly={true} onBack={leaveStageAndCancel} onContinue={async () => false} />
 
-  <section class="stage6-section" aria-label="Editable energy thresholds">
-    <div class="stage6-heading"><div><h2>Energy thresholds</h2><p>The same S24 cells remain editable in stages 5 and 6.</p></div>
-      <div class="stage6-toolbar"><button class="button button-secondary" disabled={!thresholdsFresh || !canEdit} onclick={copyEnergyThresholds}>Copy computed thresholds</button></div>
+  <section class="stage6-section" aria-label="Read-only energy threshold results">
+    <div class="stage6-heading"><div><h2>Energy thresholds</h2><p>Stage 5 threshold decisions and computed values are shown read only.</p></div>
     </div>
     {#if !energyEdits}<p class="stage6-error" role="alert">The shared energy-threshold table is unavailable.</p>
     {:else}
-      <div class="stage5-energy-wrap"><table class="stage5-energy-table" aria-label="Editable energy thresholds by protein range">
+      <div class="stage5-energy-wrap"><table class="stage5-energy-table" aria-label="Energy thresholds by protein range">
         <thead><tr><th>Fragment</th>{#each rangeRows.slice(1) as proteinRange, rangeIndex (`${proteinRange.chain}:${proteinRange.start}-${proteinRange.end}`)}<th colspan="3">Range {rangeIndex + 2} · chain {proteinRange.chain} {proteinRange.start}–{proteinRange.end}</th>{/each}</tr>
           <tr><th>Reference / best-fit energy, threshold</th>{#each rangeRows.slice(1) as _range, rangeIndex (`r-${rangeIndex}`)}<th>Reference</th><th>Best fit</th><th>Threshold</th>{/each}</tr></thead>
         <tbody>{#each (isRecord(fragments) && Array.isArray(fragments.fragments) ? fragments.fragments : []) as fragment (fragment.key)}
@@ -543,10 +493,10 @@
               {@const rangeId = `range-${rangeIndex + 2}`}{@const reference = rowEnergy(rangeId, fragment.key, 'reference')}{@const bestfit = rowEnergy(rangeId, fragment.key, 'bestfit')}{@const threshold = thresholdValue(proteinRange, fragment.key)}{@const computed = computedValue(proteinRange, fragment.key)}
               <td class="stage5-energy" style={`background:${energyColor(reference?.energy)}`} title={reference?.error ?? 'Capped at ±20'}>{reference?.error ? `Error: ${reference.error}` : energyLabel(reference?.energy)}</td>
               <td class="stage5-energy" style={`background:${energyColor(bestfit?.energy)}`} title={bestfit?.error ?? 'Capped at ±20'}>{bestfit?.error ? `Error: ${bestfit.error}` : energyLabel(bestfit?.energy)}</td>
-              <td class="stage5-threshold-cell"><input aria-label={`${fragment.key} ${rangeId} energy threshold`} value={threshold ?? ''} disabled={!canEdit} onchange={event => editEnergy(proteinRange, fragment.key, event.currentTarget.value)} />
+              <td class="stage5-threshold-cell"><output aria-label={`${fragment.key} ${rangeId} energy threshold`}>{threshold ?? '—'}</output>
                 {#if computed !== null}<small class="stage5-computed-threshold">Computed: {computed}</small>{/if}
                 {#if computed !== null && threshold !== computed}<span class="stage5-diff" title="Differs from computed">●</span>{/if}
-                <button class="stage4-revert" aria-label={`Revert ${fragment.key} ${rangeId} to computed`} disabled={!thresholdsFresh || computed === null || threshold === computed} onclick={() => revertEnergy(proteinRange, fragment.key)}>↶</button></td>
+              </td>
             {/each}
           </tr>
         {/each}</tbody>

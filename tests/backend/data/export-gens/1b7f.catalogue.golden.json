@@ -18,13 +18,13 @@
       "frag3-anchor-ident",
       "frag3-anchor-raw",
       "frag4",
-      "frag4-anchor-from-4",
-      "frag4-anchor-from-5",
+      "frag4-anchor-from-nuc4",
+      "frag4-anchor-from-nuc5",
       "frag4-anchor-ident",
       "frag4-anchor-scored",
       "frag5",
-      "frag5-anchor-from-5",
-      "frag5-anchor-from-6",
+      "frag5-anchor-from-nuc5",
+      "frag5-anchor-from-nuc6",
       "frag5-anchor-ident",
       "frag5-anchor-scored",
       "frag5-anchor-scored-e1",
@@ -77,8 +77,8 @@
       "frag3-anchor-ident",
       "frag3-anchor-raw",
       "frag4",
-      "frag4-anchor-from-4",
-      "frag4-anchor-from-5",
+      "frag4-anchor-from-nuc4",
+      "frag4-anchor-from-nuc5",
       "frag4-anchor-ident",
       "frag5-anchor-range3-grown",
       "frag5-anchor-range3-ident",
@@ -106,13 +106,13 @@
       "frag3-anchor-ident",
       "frag3-anchor-raw",
       "frag4",
-      "frag4-anchor-from-4",
-      "frag4-anchor-from-5",
+      "frag4-anchor-from-nuc4",
+      "frag4-anchor-from-nuc5",
       "frag4-anchor-ident",
       "frag4-anchor-scored",
       "frag5",
-      "frag5-anchor-from-5",
-      "frag5-anchor-from-6",
+      "frag5-anchor-from-nuc5",
+      "frag5-anchor-from-nuc6",
       "frag5-anchor-ident",
       "frag5-anchor-scored",
       "frag5-anchor-scored-e1",
@@ -165,8 +165,8 @@
       "frag3-anchor-ident",
       "frag3-anchor-raw",
       "frag4",
-      "frag4-anchor-from-4",
-      "frag4-anchor-from-5",
+      "frag4-anchor-from-nuc4",
+      "frag4-anchor-from-nuc5",
       "frag4-anchor-ident",
       "frag5-anchor-range3-grown",
       "frag5-anchor-range3-ident",
@@ -211,13 +211,13 @@
       "frag3-anchor-ident",
       "frag3-anchor-raw",
       "frag4",
-      "frag4-anchor-from-4",
-      "frag4-anchor-from-5",
+      "frag4-anchor-from-nuc4",
+      "frag4-anchor-from-nuc5",
       "frag4-anchor-ident",
       "frag4-anchor-scored",
       "frag5",
-      "frag5-anchor-from-5",
-      "frag5-anchor-from-6",
+      "frag5-anchor-from-nuc5",
+      "frag5-anchor-from-nuc6",
       "frag5-anchor-ident",
       "frag5-anchor-scored",
       "frag5-anchor-scored-e1",
@@ -270,8 +270,8 @@
       "frag3-anchor-ident",
       "frag3-anchor-raw",
       "frag4",
-      "frag4-anchor-from-4",
-      "frag4-anchor-from-5",
+      "frag4-anchor-from-nuc4",
+      "frag4-anchor-from-nuc5",
       "frag4-anchor-ident",
       "frag5-anchor-range3-grown",
       "frag5-anchor-range3-ident",
@@ -299,13 +299,13 @@
       "frag3-anchor-ident",
       "frag3-anchor-raw",
       "frag4",
-      "frag4-anchor-from-4",
-      "frag4-anchor-from-5",
+      "frag4-anchor-from-nuc4",
+      "frag4-anchor-from-nuc5",
       "frag4-anchor-ident",
       "frag4-anchor-scored",
       "frag5",
-      "frag5-anchor-from-5",
-      "frag5-anchor-from-6",
+      "frag5-anchor-from-nuc5",
+      "frag5-anchor-from-nuc6",
       "frag5-anchor-ident",
       "frag5-anchor-scored",
       "frag5-anchor-scored-e1",
@@ -358,8 +358,8 @@
       "frag3-anchor-ident",
       "frag3-anchor-raw",
       "frag4",
-      "frag4-anchor-from-4",
-      "frag4-anchor-from-5",
+      "frag4-anchor-from-nuc4",
+      "frag4-anchor-from-nuc5",
       "frag4-anchor-ident",
       "frag5-anchor-range3-grown",
       "frag5-anchor-range3-ident",
@@ -948,7 +948,7 @@
     ]
   },
   {
-    "path": "merge/bwd/fixed/gen-frag6",
+    "path": "merge/bwd/fixed/anchor-refe/gen-frag6-merged",
     "modes": [
       "fixed"
     ],
@@ -969,7 +969,42 @@
         "frame": "fixed",
         "producers": [
           "anchor-refe/bwd/fixed/gen-frag3-6",
-          "anchor-refe/fwd/fixed/gen-frag3-6",
+          "anchor-refe/fwd/fixed/gen-frag3-6"
+        ]
+      },
+      {
+        "pool": "frag7",
+        "fragment": "frag-7-CG",
+        "sequence": "CG",
+        "frame": "fixed",
+        "producers": [
+          "grow/bwd/fixed/gen-frag7",
+          "grow/fwd/fixed/gen-frag7"
+        ]
+      }
+    ]
+  },
+  {
+    "path": "merge/bwd/fixed/anchor/gen-frag6-merged",
+    "modes": [
+      "fixed"
+    ],
+    "range": null,
+    "direction": "bwd",
+    "final_pools": [
+      "frag6-merged"
+    ],
+    "actions": [
+      "frag6-merged",
+      "frag6-merged-grown"
+    ],
+    "external_inputs": [
+      {
+        "pool": "frag6",
+        "fragment": "frag-6-UC",
+        "sequence": "UC",
+        "frame": "fixed",
+        "producers": [
           "anchor/bwd/fixed/gen-frag3-6",
           "anchor/fwd/fixed/gen-frag3-6"
         ]
@@ -987,7 +1022,7 @@
     ]
   },
   {
-    "path": "merge/bwd/fixed/gen-frag7",
+    "path": "merge/bwd/fixed/gen-frag7-merged",
     "modes": [
       "fixed"
     ],
@@ -997,7 +1032,8 @@
       "frag7-merged"
     ],
     "actions": [
-      "frag7-merged"
+      "frag7-merged",
+      "frag7-merged-grown"
     ],
     "external_inputs": [
       {
@@ -1023,7 +1059,7 @@
     ]
   },
   {
-    "path": "merge/bwd/fixed/gen-frag8",
+    "path": "merge/bwd/fixed/gen-frag8-merged",
     "modes": [
       "fixed"
     ],
@@ -1033,7 +1069,8 @@
       "frag8-merged"
     ],
     "actions": [
-      "frag8-merged"
+      "frag8-merged",
+      "frag8-merged-grown"
     ],
     "external_inputs": [
       {
@@ -1060,7 +1097,7 @@
     ]
   },
   {
-    "path": "merge/bwd/gen-frag9",
+    "path": "merge/bwd/gen-frag9-merged",
     "modes": [
       "fixed",
       "unfixed"
@@ -1071,7 +1108,8 @@
       "frag9-merged"
     ],
     "actions": [
-      "frag9-merged"
+      "frag9-merged",
+      "frag9-merged-grown"
     ],
     "external_inputs": [
       {
@@ -1098,7 +1136,7 @@
     ]
   },
   {
-    "path": "merge/bwd/unfixed/gen-frag6",
+    "path": "merge/bwd/unfixed/anchor-refe/gen-frag6-merged",
     "modes": [
       "unfixed"
     ],
@@ -1119,7 +1157,42 @@
         "frame": "range-2",
         "producers": [
           "anchor-refe/bwd/unfixed/range-2/gen-frag5-6",
-          "anchor-refe/fwd/unfixed/range-2/gen-frag5-6",
+          "anchor-refe/fwd/unfixed/range-2/gen-frag5-6"
+        ]
+      },
+      {
+        "pool": "frag7-range2",
+        "fragment": "frag-7-CG",
+        "sequence": "CG",
+        "frame": "range-2",
+        "producers": [
+          "grow/bwd/unfixed/gen-frag7",
+          "grow/fwd/unfixed/range-2/gen-frag7"
+        ]
+      }
+    ]
+  },
+  {
+    "path": "merge/bwd/unfixed/anchor/gen-frag6-merged",
+    "modes": [
+      "unfixed"
+    ],
+    "range": "range-2",
+    "direction": "bwd",
+    "final_pools": [
+      "frag6-merged-range2"
+    ],
+    "actions": [
+      "frag6-merged-range2",
+      "frag6-merged-range2-grown"
+    ],
+    "external_inputs": [
+      {
+        "pool": "frag6-range2",
+        "fragment": "frag-6-UC",
+        "sequence": "UC",
+        "frame": "range-2",
+        "producers": [
           "anchor/bwd/unfixed/range-2/gen-frag5-6",
           "anchor/fwd/unfixed/range-2/gen-frag5-6"
         ]
@@ -1137,7 +1210,7 @@
     ]
   },
   {
-    "path": "merge/bwd/unfixed/gen-frag7",
+    "path": "merge/bwd/unfixed/gen-frag7-merged",
     "modes": [
       "unfixed"
     ],
@@ -1147,7 +1220,8 @@
       "frag7-merged-range2"
     ],
     "actions": [
-      "frag7-merged-range2"
+      "frag7-merged-range2",
+      "frag7-merged-range2-grown"
     ],
     "external_inputs": [
       {
@@ -1173,7 +1247,7 @@
     ]
   },
   {
-    "path": "merge/bwd/unfixed/gen-frag8",
+    "path": "merge/bwd/unfixed/gen-frag8-merged",
     "modes": [
       "unfixed"
     ],
@@ -1183,7 +1257,8 @@
       "frag8-merged-range2"
     ],
     "actions": [
-      "frag8-merged-range2"
+      "frag8-merged-range2",
+      "frag8-merged-range2-grown"
     ],
     "external_inputs": [
       {
@@ -1210,7 +1285,83 @@
     ]
   },
   {
-    "path": "merge/fwd/fixed/gen-frag7",
+    "path": "merge/fwd/anchor-refe/gen-frag10-merged",
+    "modes": [
+      "fixed",
+      "unfixed"
+    ],
+    "range": null,
+    "direction": "fwd",
+    "final_pools": [
+      "frag10-merged"
+    ],
+    "actions": [
+      "frag10-merged",
+      "frag10-merged-grown"
+    ],
+    "external_inputs": [
+      {
+        "pool": "frag10",
+        "fragment": "frag-10-CU",
+        "sequence": "CU",
+        "frame": "range-2",
+        "producers": [
+          "anchor-refe/gen-frag10"
+        ]
+      },
+      {
+        "pool": "frag9",
+        "fragment": "frag-9-AC",
+        "sequence": "AC",
+        "frame": "range-2",
+        "producers": [
+          "grow/bwd/gen-frag9",
+          "grow/fwd/fixed/gen-frag9",
+          "grow/fwd/unfixed/range-2/gen-frag9"
+        ]
+      }
+    ]
+  },
+  {
+    "path": "merge/fwd/anchor/gen-frag10-merged",
+    "modes": [
+      "fixed",
+      "unfixed"
+    ],
+    "range": null,
+    "direction": "fwd",
+    "final_pools": [
+      "frag10-merged"
+    ],
+    "actions": [
+      "frag10-merged",
+      "frag10-merged-grown"
+    ],
+    "external_inputs": [
+      {
+        "pool": "frag10",
+        "fragment": "frag-10-CU",
+        "sequence": "CU",
+        "frame": "range-2",
+        "producers": [
+          "anchor/gen-frag10"
+        ]
+      },
+      {
+        "pool": "frag9",
+        "fragment": "frag-9-AC",
+        "sequence": "AC",
+        "frame": "range-2",
+        "producers": [
+          "grow/bwd/gen-frag9",
+          "grow/fwd/fixed/gen-frag9",
+          "grow/fwd/unfixed/range-2/gen-frag9"
+        ]
+      }
+    ]
+  },
+  {
+    "path": "merge/fwd/fixed/gen-frag7-merged",
     "modes": [
       "fixed"
     ],
@@ -1220,7 +1371,8 @@
       "frag7-merged"
     ],
     "actions": [
-      "frag7-merged"
+      "frag7-merged",
+      "frag7-merged-grown"
     ],
     "external_inputs": [
       {
@@ -1248,7 +1400,7 @@
     ]
   },
   {
-    "path": "merge/fwd/fixed/gen-frag8",
+    "path": "merge/fwd/fixed/gen-frag8-merged",
     "modes": [
       "fixed"
     ],
@@ -1258,7 +1410,8 @@
       "frag8-merged"
     ],
     "actions": [
-      "frag8-merged"
+      "frag8-merged",
+      "frag8-merged-grown"
     ],
     "external_inputs": [
       {
@@ -1284,7 +1437,7 @@
     ]
   },
   {
-    "path": "merge/fwd/fixed/gen-frag9",
+    "path": "merge/fwd/fixed/gen-frag9-merged",
     "modes": [
       "fixed"
     ],
@@ -1294,7 +1447,8 @@
       "frag9-merged"
     ],
     "actions": [
-      "frag9-merged"
+      "frag9-merged",
+      "frag9-merged-grown"
     ],
     "external_inputs": [
       {
@@ -1321,46 +1475,7 @@
     ]
   },
   {
-    "path": "merge/fwd/gen-frag10",
-    "modes": [
-      "fixed",
-      "unfixed"
-    ],
-    "range": null,
-    "direction": "fwd",
-    "final_pools": [
-      "frag10-merged"
-    ],
-    "actions": [
-      "frag10-merged",
-      "frag10-merged-grown"
-    ],
-    "external_inputs": [
-      {
-        "pool": "frag10",
-        "fragment": "frag-10-CU",
-        "sequence": "CU",
-        "frame": "range-2",
-        "producers": [
-          "anchor-refe/gen-frag10",
-          "anchor/gen-frag10"
-        ]
-      },
-      {
-        "pool": "frag9",
-        "fragment": "frag-9-AC",
-        "sequence": "AC",
-        "frame": "range-2",
-        "producers": [
-          "grow/bwd/gen-frag9",
-          "grow/fwd/fixed/gen-frag9",
-          "grow/fwd/unfixed/range-2/gen-frag9"
-        ]
-      }
-    ]
-  },
-  {
-    "path": "merge/fwd/unfixed/gen-frag7",
+    "path": "merge/fwd/unfixed/gen-frag7-merged",
     "modes": [
       "unfixed"
     ],
@@ -1370,7 +1485,8 @@
       "frag7-merged-range2"
     ],
     "actions": [
-      "frag7-merged-range2"
+      "frag7-merged-range2",
+      "frag7-merged-range2-grown"
     ],
     "external_inputs": [
       {
@@ -1398,7 +1514,7 @@
     ]
   },
   {
-    "path": "merge/fwd/unfixed/gen-frag8",
+    "path": "merge/fwd/unfixed/gen-frag8-merged",
     "modes": [
       "unfixed"
     ],
@@ -1408,7 +1524,8 @@
       "frag8-merged-range2"
     ],
     "actions": [
-      "frag8-merged-range2"
+      "frag8-merged-range2",
+      "frag8-merged-range2-grown"
     ],
     "external_inputs": [
       {
@@ -1434,7 +1551,7 @@
     ]
   },
   {
-    "path": "merge/fwd/unfixed/gen-frag9",
+    "path": "merge/fwd/unfixed/gen-frag9-merged",
     "modes": [
       "unfixed"
     ],
@@ -1444,7 +1561,8 @@
       "frag9-merged"
     ],
     "actions": [
-      "frag9-merged"
+      "frag9-merged",
+      "frag9-merged-grown"
     ],
     "external_inputs": [
       {

@@ -15,8 +15,8 @@
     type ThresholdMarker,
   } from '../lib/stage4';
 
-  let { onBack, onContinue, embedded = false }: {
-    onBack: () => Promise<boolean>; onContinue: () => Promise<boolean>; embedded?: boolean;
+  let { onBack, onContinue, embedded = false, readOnly = false }: {
+    onBack: () => Promise<boolean>; onContinue: () => Promise<boolean>; embedded?: boolean; readOnly?: boolean;
   } = $props();
   let edits = $state<ThresholdMarker | null>(null);
   let message = $state('');
@@ -293,7 +293,7 @@
       <section class="stage4-overlap-card" aria-label="Shared nucleotide overlap thresholds">
         <header class="stage4-overlap-header">
           <div><span class="stage4-kicker">Shared overlap · {activePair.residue.base} at {residueLabel(activePair.residue)}</span><h2>frag-{activePair.down} ↔ frag-{activePair.up}</h2></div>
-          {#if !activePair.clipped}<button class="button button-secondary" disabled={!canCopyActive || !activeThreshold} onclick={copyActive}>Copy cRMSD / ovRMSD to thresholds</button>{/if}
+          {#if !readOnly && !activePair.clipped}<button class="button button-secondary" disabled={!canCopyActive || !activeThreshold} onclick={copyActive}>Copy cRMSD / ovRMSD to thresholds</button>{/if}
         </header>
         <div class="stage4-overlap-values">
           <div><span>Computed cRMSD</span><strong>{typeof activeComputedPair?.crmsd === 'string' ? activeComputedPair.crmsd : '—'}{typeof activeComputedPair?.crmsd === 'string' ? ' Å' : ''}</strong></div>
@@ -303,10 +303,10 @@
           <p class="stage4-pending" role="status">This nucleotide is outside the clip. The computed overlap values remain visible; threshold inputs and copying are unavailable.</p>
         {:else if activeThreshold}
           <div class="stage4-threshold-fields">
-            <label>cRMSD threshold <span>Å</span><input aria-label="Overlap cRMSD threshold" inputmode="decimal" value={activeThreshold.row.crmsd ?? ''} oninput={event => explainInvalidDraft(event.currentTarget.value)} onchange={event => editValue('pairs', activeThreshold!.index, 'crmsd', event.currentTarget.value)} />
+            <label>cRMSD threshold <span>Å</span>{#if readOnly}<output aria-label="Overlap cRMSD threshold">{activeThreshold.row.crmsd ?? '—'}</output>{:else}<input aria-label="Overlap cRMSD threshold" inputmode="decimal" value={activeThreshold.row.crmsd ?? ''} oninput={event => explainInvalidDraft(event.currentTarget.value)} onchange={event => editValue('pairs', activeThreshold!.index, 'crmsd', event.currentTarget.value)} />{/if}
               {#if activeThreshold.row.crmsd !== computedValue(activeThreshold.row as Record<string, any>, 'crmsd') && computedValue(activeThreshold.row as Record<string, any>, 'crmsd') !== null}<span class="stage4-diff" title="Differs from computed">●</span>{/if}
               {#if isWarning(activeThreshold.row.crmsd)}<small class="stage4-warning">Above 10 Å</small>{/if}</label>
-            <label>ovRMSD threshold <span>Å</span><input aria-label="Overlap ovRMSD threshold" inputmode="decimal" value={activeThreshold.row.ovrmsd ?? ''} oninput={event => explainInvalidDraft(event.currentTarget.value)} onchange={event => editValue('pairs', activeThreshold!.index, 'ovrmsd', event.currentTarget.value)} />
+            <label>ovRMSD threshold <span>Å</span>{#if readOnly}<output aria-label="Overlap ovRMSD threshold">{activeThreshold.row.ovrmsd ?? '—'}</output>{:else}<input aria-label="Overlap ovRMSD threshold" inputmode="decimal" value={activeThreshold.row.ovrmsd ?? ''} oninput={event => explainInvalidDraft(event.currentTarget.value)} onchange={event => editValue('pairs', activeThreshold!.index, 'ovrmsd', event.currentTarget.value)} />{/if}
               {#if activeThreshold.row.ovrmsd !== computedValue(activeThreshold.row as Record<string, any>, 'ovrmsd') && computedValue(activeThreshold.row as Record<string, any>, 'ovrmsd') !== null}<span class="stage4-diff" title="Differs from computed">●</span>{/if}
               {#if isWarning(activeThreshold.row.ovrmsd)}<small class="stage4-warning">Above 10 Å</small>{/if}</label>
           </div>

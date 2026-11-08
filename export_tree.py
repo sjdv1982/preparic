@@ -171,6 +171,9 @@ def _validate_recipes(recipes: Any) -> list[dict]:
             terminal_match = re.fullmatch(r"gen-frag([1-9][0-9]*)-([1-9][0-9]*)", terminal)
             valid_terminal = terminal_match is not None \
                 and int(terminal_match.group(1)) < int(terminal_match.group(2))
+        elif root == "merge":
+            # Named after the final pool the gen generates (`fragN-merged`).
+            valid_terminal = re.fullmatch(r"gen-frag[1-9][0-9]*-merged", terminal) is not None
         else:
             valid_terminal = re.fullmatch(r"gen-frag[1-9][0-9]*", terminal) is not None
         if not valid_terminal:

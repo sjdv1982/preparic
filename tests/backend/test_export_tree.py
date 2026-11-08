@@ -65,33 +65,6 @@ def _complete_tree_snapshot():
     return snapshot
 
 
-def _add_multiple_stackings_at_nuc11(snapshot):
-    anchor = next(row for row in snapshot["candidate_anchors"]
-                  if row["resid"] == 11 and row["range"] == "range-2")
-    added = []
-    for protein_resid in (50, 51):
-        key = json.dumps(["U", 11, 2, protein_resid], separators=(",", ":"))
-        anchor["stackings"].append(key)
-        added.append({
-            "key": key,
-            "rna_resname": "U",
-            "rna_resid": 11,
-            "range": "range-2",
-            "protein_resid": protein_resid,
-        })
-    anchor["stackings"].sort()
-    snapshot["stacking_selection"] = sorted(
-        snapshot["stacking_selection"] + [row["key"] for row in added]
-    )
-    snapshot["stackings"] = sorted(snapshot["stackings"] + added, key=lambda row: row["key"])
-    snapshot["class_table"] = sorted(
-        snapshot["class_table"]
-        + [{"key": row["key"], "rrm": 90, "tilt30": False, "disp45": False}
-           for row in added],
-        key=lambda row: row["key"],
-    )
-
-
 @pytest.fixture
 def tree_inputs():
     snapshot = _complete_tree_snapshot()
@@ -223,11 +196,7 @@ def test_constraints_energy_and_score_filter_members_follow_schema(tree_inputs):
 
 
 def test_manifest_is_compact_ordered_and_keeps_source_qualified_producers(tree_inputs):
-    snapshot, _, _ = tree_inputs
-    snapshot = deepcopy(snapshot)
-    _add_multiple_stackings_at_nuc11(snapshot)
-    recipes = export_gens.plan_gens(snapshot)
-    digest = export_snapshot.snapshot_digest(snapshot)
+    snapshot, recipes, digest = tree_inputs
     tree = _render(snapshot, recipes, digest)
     manifest = _json_member(tree, "DATA/export-manifest.json")
 
@@ -251,7 +220,7 @@ def test_manifest_is_compact_ordered_and_keeps_source_qualified_producers(tree_i
     # tree in the manifest; the adjacent grown-side input keeps all producers.
     for source in ("anchor", "anchor-refe"):
         gen = next(item for item in recipes
-                   if item["path"] == f"merge/fwd/{source}/gen-frag10")
+                   if item["path"] == f"merge/fwd/{source}/gen-frag10-merged")
         record = next(item for item in manifest["gens"] if item["path"] == gen["path"])
         target = next(row for row in record["external_inputs"] if row["pool"] == "frag10")
         assert target["producers"]
@@ -344,18 +313,18 @@ def test_render_tree_rejects_unsafe_generated_paths(tree_inputs, bad_path):
     # merge source immediately before its terminal gen folder.
     ("grow/fwd/fixed/gen-frag7", "grow/fwd/anchor/gen-frag7"),
     ("anchor/fwd/fixed/gen-frag3-6", "anchor/fwd/fixed/anchor/gen-frag3-6"),
-    ("merge/fwd/gen-frag10", "merge/fwd/anchor-refe/fixed/gen-frag10"),
+    ("merge/fwd/anchor/gen-frag10-merged", "merge/fwd/anchor/fixed/gen-frag10-merged"),
     # Grow and merge require direction before their mode and range levels.
     ("grow/fwd/fixed/gen-frag7", "grow/fixed/fwd/gen-frag7"),
     ("grow/fwd/fixed/gen-frag7", "grow/fixed/gen-frag7"),
-    ("merge/fwd/gen-frag10", "merge/fixed/fwd/gen-frag10"),
-    ("merge/fwd/gen-frag10", "merge/fixed/gen-frag10"),
+    ("merge/fwd/anchor/gen-frag10-merged", "merge/fixed/fwd/anchor/gen-frag10-merged"),
+    ("merge/fwd/anchor/gen-frag10-merged", "merge/fixed/anchor/gen-frag10-merged"),
     # A range is valid only after `unfixed`; it cannot be attached to fixed.
     ("anchor/fwd/unfixed/range-2/gen-frag5-6",
      "anchor/fwd/range-2/unfixed/gen-frag5-6"),
     ("anchor/fwd/unfixed/range-2/gen-frag5-6", "anchor/fwd/range-2/gen-frag5-6"),
     ("anchor/fwd/fixed/gen-frag3-6", "anchor/fwd/fixed/range-2/gen-frag3-6"),
-    ("merge/fwd/gen-frag10", "merge/fwd/fixed/range-2/gen-frag10"),
+    ("merge/fwd/anchor/gen-frag10-merged", "merge/fwd/fixed/range-2/anchor/gen-frag10-merged"),
     # Common-conformer has no direction, mode, or range classifier levels.
     ("common-conformer/gen-frag5-range-2-3", "common-conformer/fwd/gen-frag5-range-2-3"),
 ])
@@ -371,17 +340,13 @@ def test_render_tree_rejects_misclassified_generator_paths(tree_inputs, source_p
 
 
 def test_render_tree_rejects_multiple_merge_source_qualifiers(tree_inputs):
-    snapshot, _, _ = tree_inputs
-    snapshot = deepcopy(snapshot)
-    _add_multiple_stackings_at_nuc11(snapshot)
-    recipes = export_gens.plan_gens(snapshot)
-    digest = export_snapshot.snapshot_digest(snapshot)
+    snapshot, recipes, digest = tree_inputs
 
-    # This divergent fixture produces valid source-qualified R12 merges.
+    # The single-stacking nuc11 anchor yields valid source-qualified merges.
     changed = deepcopy(recipes)
     recipe = next(item for item in changed
-                  if item["path"] == "merge/fwd/anchor/gen-frag10")
-    bad_path = "merge/fwd/anchor/anchor-refe/gen-frag10"
+                  if item["path"] == "merge/fwd/anchor/gen-frag10-merged")
+    bad_path = "merge/fwd/anchor/anchor-refe/gen-frag10-merged"
     assert bad_path not in {item["path"] for item in recipes}
     recipe["path"] = bad_path
 

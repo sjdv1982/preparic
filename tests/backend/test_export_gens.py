@@ -129,7 +129,7 @@ def test_1b7f_catalogue_matches_committed_golden(one_b_seven_f_snapshot):
 def test_1b7f_exact_physical_gen_count_and_mode_catalogue(one_b_seven_f_snapshot):
     gens = _gens(one_b_seven_f_snapshot)
     by_path = _by_path(gens)
-    assert len(gens) == 46
+    assert len(gens) == 49
 
     # §10 retains both anchor-tree and direction alternatives.  The clipped
     # nuc11 outer fragment produces a single-fragment gen, not gen-frag10-11.
@@ -153,10 +153,11 @@ def test_1b7f_exact_physical_gen_count_and_mode_catalogue(one_b_seven_f_snapshot
         f"common-conformer/gen-frag{n}-range-2-3" for n in range(5, 9)
     }
 
-    # The five recipes whose rendered graphs agree across modes are hoisted.
+    # The six recipes whose rendered graphs agree across modes are hoisted.
     for path in (
         "anchor/gen-frag10", "anchor-refe/gen-frag10", "grow/bwd/gen-frag9",
-        "merge/fwd/gen-frag10", "merge/bwd/gen-frag9",
+        "merge/fwd/anchor/gen-frag10-merged", "merge/fwd/anchor-refe/gen-frag10-merged",
+        "merge/bwd/gen-frag9-merged",
     ):
         assert path in by_path
         assert set(by_path[path]["modes"]) == {"fixed", "unfixed"}
@@ -586,7 +587,7 @@ def test_k2_inner_fragment_qualifies_each_multi_stacking_fold(one_b_seven_f_snap
     # Both adjacent nucleotides have three raw stackings on inner frag4.
     # Each binary fold chain gets its own candidate-qualified temporary.
     for ordinal in (4, 5):
-        stem = f"frag4-anchor-from-{ordinal}"
+        stem = f"frag4-anchor-from-nuc{ordinal}"
         assert {f"{stem}-{index}" for index in (1, 2, 3)} <= set(actions)
         fold = actions[f"{stem}-ident-1"]["parameters"]
         assert fold == {
@@ -603,8 +604,8 @@ def test_k2_inner_fragment_qualifies_each_multi_stacking_fold(one_b_seven_f_snap
 
     assert actions["frag4-anchor-ident"]["parameters"] == {
         "action": "identity",
-        "input1": "frag4-anchor-from-4",
-        "input2": "frag4-anchor-from-5",
+        "input1": "frag4-anchor-from-nuc4",
+        "input2": "frag4-anchor-from-nuc5",
     }
     assert len([action for action in _actions_of(gen, "anchor")
                 if action["parameters"]["fragment"] == 4]) == 6
@@ -612,8 +613,7 @@ def test_k2_inner_fragment_qualifies_each_multi_stacking_fold(one_b_seven_f_snap
     export_gens.validate_recipe(gen)
 
 
-def test_merge_r12_uses_anchor_tree_and_qualifies_only_divergent_paths(one_b_seven_f_snapshot):
-    snapshot = deepcopy(one_b_seven_f_snapshot)
+def _add_stackings_at_nuc11(snapshot):
     anchor = next(row for row in snapshot["candidate_anchors"]
                   if row["resid"] == 11 and row["range"] == "range-2")
     added = []
@@ -638,34 +638,39 @@ def test_merge_r12_uses_anchor_tree_and_qualifies_only_divergent_paths(one_b_sev
         key=lambda row: row["key"],
     )
 
-    by_path = _by_path(_gens(snapshot))
-    gaussian = by_path["merge/fwd/anchor/gen-frag10"]
-    reference = by_path["merge/fwd/anchor-refe/gen-frag10"]
-    assert len(_actions_of(by_path["anchor/gen-frag10"], "anchor")) == 3
-    assert len(_actions_of(by_path["anchor-refe/gen-frag10"], "anchor-refe")) == 1
 
-    # Gaussian sees three raw stackings, so it keeps the cheaper restriction
-    # by the combined anchor pool. Reference deduplicates to one candidate,
-    # so R12 uses grow followed by intersection with that anchor pool.
-    gaussian_grow = _actions_of(gaussian, "grow")
-    assert len(gaussian_grow) == 1
-    assert gaussian_grow[0]["name"] == "frag10-merged"
-    assert gaussian_grow[0]["parameters"]["input"] == "frag9"
-    assert gaussian_grow[0]["parameters"]["restrict_input"] == "frag10"
-    assert not _actions_of(gaussian, "identity")
-
-    reference_grow = _actions_of(reference, "grow")
-    reference_identity = _actions_of(reference, "identity")
-    assert len(reference_grow) == len(reference_identity) == 1
-    assert reference_grow[0]["name"] == "frag10-merged-grown"
-    assert reference_grow[0]["parameters"]["input"] == "frag9"
-    assert "restrict_input" not in reference_grow[0]["parameters"]
-    assert reference_identity[0]["name"] == "frag10-merged"
-    assert reference_identity[0]["parameters"] == {
+def _grow_identity_pair(gen, *, restricted, restrict_pool):
+    grow = _actions_of(gen, "grow")
+    identity = _actions_of(gen, "identity")
+    assert len(grow) == len(identity) == 1
+    assert grow[0]["name"] == f"{restrict_pool}-merged-grown"
+    if restricted:
+        assert grow[0]["parameters"]["restrict_input"] == restrict_pool
+    else:
+        assert "restrict_input" not in grow[0]["parameters"]
+    assert identity[0]["name"] == f"{restrict_pool}-merged"
+    assert identity[0]["parameters"] == {
         "action": "identity",
-        "input1": "frag10-merged-grown",
-        "input2": "frag10",
+        "input1": f"{restrict_pool}-merged-grown",
+        "input2": restrict_pool,
     }
+    return grow[0]
+
+
+def test_single_anchor_merge_is_split_by_anchor_tree(one_b_seven_f_snapshot):
+    by_path = _by_path(_gens(one_b_seven_f_snapshot))
+    gaussian = by_path["merge/fwd/anchor/gen-frag10-merged"]
+    reference = by_path["merge/fwd/anchor-refe/gen-frag10-merged"]
+    assert "merge/fwd/gen-frag10-merged" not in by_path
+    assert len(_actions_of(by_path["anchor/gen-frag10"], "anchor")) == 1
+
+    # A single Gaussian anchor pool is too large for `restrict_input` (R12):
+    # unrestricted grow + identity.  The reference pool is small, so that merge
+    # keeps `restrict_input`, like a merge restricted by a grown pool.  Both
+    # end with an identity with the restricting pool.
+    gaussian_grow = _grow_identity_pair(gaussian, restricted=False, restrict_pool="frag10")
+    reference_grow = _grow_identity_pair(reference, restricted=True, restrict_pool="frag10")
+    assert gaussian_grow["parameters"]["input"] == reference_grow["parameters"]["input"] == "frag9"
     assert gaussian["final_pools"] == reference["final_pools"] == ["frag10-merged"]
     all_frag9_producers = sorted(
         gen["path"] for gen in by_path.values() if "frag9" in gen["final_pools"]
@@ -681,13 +686,33 @@ def test_merge_r12_uses_anchor_tree_and_qualifies_only_divergent_paths(one_b_sev
     export_gens.validate_recipe(gaussian)
     export_gens.validate_recipe(reference)
 
-    # The neighboring merge ends on a grown pool and has the same graph for
-    # both anchor trees, so it retains the generic path.
+    # The bwd boundary merge at the other anchor is split the same way.
+    for mode_level in ("fixed", "unfixed"):
+        assert f"merge/bwd/{mode_level}/anchor/gen-frag6-merged" in by_path
+        assert f"merge/bwd/{mode_level}/anchor-refe/gen-frag6-merged" in by_path
+
+    # A merge ending on a grown pool has no anchor tree level.
     generic = [gen for path, gen in by_path.items()
-               if path.startswith("merge/fwd/") and path.endswith("gen-frag9")]
+               if path.startswith("merge/fwd/") and path.endswith("gen-frag9-merged")]
     assert generic
     assert all(not any(f"/{tree}/" in gen["path"] for tree in ("anchor", "anchor-refe"))
                for gen in generic)
+
+
+def test_multi_stacking_anchor_merge_restricts_in_both_trees(one_b_seven_f_snapshot):
+    snapshot = deepcopy(one_b_seven_f_snapshot)
+    _add_stackings_at_nuc11(snapshot)
+    by_path = _by_path(_gens(snapshot))
+    assert len(_actions_of(by_path["anchor/gen-frag10"], "anchor")) == 3
+    assert len(_actions_of(by_path["anchor-refe/gen-frag10"], "anchor-refe")) == 1
+
+    # The combined Gaussian pool is cheap to restrict by, and the reference
+    # pool is too: both trees give the same graph, so there is no split.
+    assert not any(path.startswith("merge/fwd/anchor") for path in by_path)
+    merge = by_path["merge/fwd/gen-frag10-merged"]
+    _grow_identity_pair(merge, restricted=True, restrict_pool="frag10")
+    external = {row["pool"]: row for row in merge["external_inputs"]}
+    assert external["frag10"]["producers"] == ["anchor-refe/gen-frag10", "anchor/gen-frag10"]
 
 
 def test_external_inputs_are_typed_ordered_contracts_and_recipes_are_dags(one_b_seven_f_snapshot):

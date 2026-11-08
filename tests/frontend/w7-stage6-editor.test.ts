@@ -474,8 +474,23 @@ describe('W7 initial computed-share reads', () => {
 
 it('W8b stage 6 exposes no reference-anchor editor while keeping Gaussian validation', () => {
   const source = readFileSync(resolve(process.cwd(), 'src/components/Stage6Gaussian.svelte'), 'utf8');
+  const stage4 = readFileSync(resolve(process.cwd(), 'src/components/Stage4BestFits.svelte'), 'utf8');
   expect(source).not.toContain('refe_validation');
   expect(source).not.toContain('nuc1_ovrmsd');
   expect(source).not.toContain('nuc2_ovrmsd');
   expect(source).toContain('gaussian_validation');
+  expect(source).toContain('<Stage4BestFits embedded={true} readOnly={true}');
+  expect(stage4).toContain('readOnly = false');
+  expect(stage4).toContain("editValue('pairs'");
+  expect(stage4).toContain('<output aria-label="Overlap cRMSD threshold">');
+  expect(stage4).toContain('<output aria-label="Overlap ovRMSD threshold">');
+  expect(source).toContain('aria-label="Editable Gaussian classes by selected stacking"');
+  expect(source).not.toContain('setEnergyThresholdEdits');
+  expect(source).not.toContain('copyEnergyThresholds');
+  expect(source).not.toContain('editEnergy');
+  expect(source).not.toContain('Editable energy thresholds');
+  const energyStart = source.indexOf('<section class="stage6-section" aria-label="Read-only energy threshold results">');
+  const energyEnd = source.indexOf('</section>', energyStart);
+  const energyResults = source.slice(energyStart, energyEnd);
+  expect(energyResults).not.toMatch(/<input\b|<button\b/);
 });

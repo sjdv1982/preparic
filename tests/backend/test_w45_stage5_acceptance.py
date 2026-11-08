@@ -57,13 +57,13 @@ def matrix(rows=None, columns=None):
 
 
 def energies(high=False):
-    values = [(2, 0), (.999, -.999), (1, 0), (0, 0), (0, -1),
+    values = [(2.999, 0), (2.999, -2.999), (3, 0), (0, 0), (0, -3),
               (25, 0), None, (-4, 0), (0, 0)]
     result = {"schema": 1, "ranges": []}
     for j, range_id in enumerate(RANGES):
         rows = []
         for i, key in enumerate(KEYS):
-            value = (2, 2) if high else values[i] if j == 0 else (20, 0) if j == 1 and i == 4 else (0, 0)
+            value = (3, 3) if high else values[i] if j == 0 else (20, 0) if j == 1 and i == 4 else (0, 0)
             rows.append({"key": key, **{
                 label: {"energy": None if value is None else value[k],
                         "error": "bad ligand" if value is None else None}
@@ -322,7 +322,7 @@ def test_m6_only_boundary_touching_outer_ends_regrow(stop):
     if stop:
         cell = energy["ranges"][0]["rows"][1]
         for label in ("reference", "bestfit"):
-            cell[label] = {"energy": None if stop == "error" else .5,
+            cell[label] = {"energy": None if stop == "error" else 2.999,
                            "error": "bad" if stop == "error" else None}
     actual = adapt_interaction_matrix(old, KEYS, anchors, energy)
     assert true_rows(actual, "range-2") == (KEYS if stop is None else KEYS[2:])

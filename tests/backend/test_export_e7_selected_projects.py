@@ -78,11 +78,11 @@ FIXED_ANCHORS = ["anchor/fwd/fixed/gen-frag3-6", "anchor-refe/gen-frag10"]
 CASES = [
     pytest.param(FIXED_ANCHORS + [
         "grow/fwd/fixed/gen-frag7", "grow/fwd/fixed/gen-frag8",
-        "grow/fwd/fixed/gen-frag9", "merge/fwd/gen-frag10",
+        "grow/fwd/fixed/gen-frag9", "merge/fwd/anchor-refe/gen-frag10-merged",
     ], "fixed", "frag10-merged", id="fixed-anchor-target-r12"),
     pytest.param(FIXED_ANCHORS + [
         "grow/fwd/fixed/gen-frag7", "grow/bwd/fixed/gen-frag8",
-        "grow/bwd/gen-frag9", "merge/fwd/fixed/gen-frag8",
+        "grow/bwd/gen-frag9", "merge/fwd/fixed/gen-frag8-merged",
     ], "fixed", "frag8-merged", id="fixed-grown-target-restrict"),
     pytest.param([
         "anchor-refe/fwd/unfixed/range-3/gen-frag3-5",
@@ -90,7 +90,7 @@ CASES = [
         "grow/fwd/unfixed/range-2/gen-frag7", "grow/fwd/unfixed/range-2/gen-frag8",
         "grow/fwd/unfixed/range-2/gen-frag9", "grow/fwd/unfixed/range-3/gen-frag6",
         "grow/fwd/unfixed/range-3/gen-frag7", "grow/fwd/unfixed/range-3/gen-frag8",
-        "merge/fwd/gen-frag10",
+        "merge/fwd/anchor-refe/gen-frag10-merged",
         *[f"common-conformer/gen-frag{number}-range-2-3" for number in range(5, 9)],
     ], "unfixed", "frag10-merged", id="unfixed-two-frames-common-conformer"),
 ]
@@ -142,12 +142,12 @@ def test_e7_selected_catalogues_resolve_and_deploy(tmp_path, monkeypatch, paths,
             assert re.search(r"\{\{\s*[a-z_][a-z_0-9]*\s*\}\}", script) is None
             assert "ALARIC_ANCHOR_MIN_CELL_FRACTION" not in script
     merged = resolved[target]
-    if target == "frag10-merged":
-        assert merged.action == "identity"
-        assert merged.params["input1"].action == "grow"
-        assert merged.params["input2"].name == "frag10"
-    else:
-        assert merged.action == "grow" and merged.params["restrict_input"].name == "frag8"
+    assert merged.action == "identity"
+    assert merged.params["input1"].action == "grow"
+    # The reference tree's pool is small, so its merge keeps `restrict_input`.
+    restrict = target.removesuffix("-merged")
+    assert merged.params["input1"].params["restrict_input"].name == restrict
+    assert merged.params["input2"].name == restrict
     if mode == "fixed":
         assert {"anchor", "anchor-refe"} <= {action.action for action in resolved.values()}
         # A scored pool at a two-range fragment is filtered in tandem.
