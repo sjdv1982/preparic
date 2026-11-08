@@ -362,9 +362,11 @@ def _validate_pair_data(fragments: list[dict], kept_numbers: set[int], expected_
         if key in computed_by_pair:
             _problem("pair-address", address, "A computed pair threshold is duplicated.",
                      "Recompute stage 4 thresholds.")
+        # Raw RMSDs may be exactly zero (two conformers with identical shared-
+        # nucleotide geometry give cRMSD 0); Alaric rounds a raw 0 to "0.01".
         if not _is_finite_number(row.get("ovrmsd_raw")) or not _is_finite_number(row.get("crmsd_raw")) \
-            or row["ovrmsd_raw"] <= 0 or row["crmsd_raw"] <= 0:
-            _problem("pair-value", address, "Raw pair thresholds must be positive finite numbers.",
+            or row["ovrmsd_raw"] < 0 or row["crmsd_raw"] < 0:
+            _problem("pair-value", address, "Raw pair thresholds must be non-negative finite numbers.",
                      "Recompute stage 4 thresholds from the current library values.")
         if any(not isinstance(row.get(name), str) or _PAIR_DECIMAL.fullmatch(row[name]) is None
                for name in ("ovrmsd", "crmsd")):
@@ -386,7 +388,7 @@ def _validate_pair_data(fragments: list[dict], kept_numbers: set[int], expected_
             or row.get("sequence") != fragment["sequence"] \
             or any(not isinstance(row.get(name), str) or _PAIR_DECIMAL.fullmatch(row[name]) is None
                    for name in fields) \
-            or any(not _is_finite_number(row.get(name)) or row[name] <= 0 for name in raw_fields):
+            or any(not _is_finite_number(row.get(name)) or row[name] < 0 for name in raw_fields):
             _problem("base-thresholds", fragment["key"], "Computed base thresholds are malformed.",
                      "Recompute stage 4 base thresholds for the current fragments.")
     edit_by_pair = {}

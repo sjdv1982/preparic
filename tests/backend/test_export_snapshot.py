@@ -552,6 +552,30 @@ def test_e2_boolean_values_are_not_numeric_measurements(mutation):
     _assert_blocked(inputs)
 
 
+def test_e2_zero_raw_rmsds_are_valid_measurements():
+    # Alaric's strictly_above_cent rounds a raw 0 to "0.01". 1CVJ has cRMSD
+    # 0.000000 for three adjacent best-fit pairs.
+    inputs = _inputs()
+    pair = inputs["best_fit_thresholds"]["pairs"][0]
+    pair["crmsd_raw"], pair["crmsd"] = 0.0, "0.01"
+    base = inputs["best_fit_thresholds"]["bases"][0]
+    base["nuc1_ovrmsd_raw"], base["nuc1_ovrmsd"] = 0.0, "0.01"
+    admission = export_snapshot.build_admission(inputs)
+    assert admission["blocks"] == []
+    assert admission["ready"] is True
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda value: value["best_fit_thresholds"]["pairs"][0].__setitem__("crmsd_raw", -0.001),
+    lambda value: value["best_fit_thresholds"]["pairs"][0].__setitem__("ovrmsd_raw", -0.001),
+    lambda value: value["best_fit_thresholds"]["bases"][0].__setitem__("nuc1_ovrmsd_raw", -0.001),
+])
+def test_e2_negative_raw_rmsds_are_blocked(mutation):
+    inputs = _inputs()
+    mutation(inputs)
+    _assert_blocked(inputs)
+
+
 @pytest.mark.parametrize("bad_value", [None, {"schema": 2}])
 def test_e2_null_or_bad_schema_computed_thresholds_become_admission_blocks(bad_value):
     inputs = _inputs()
