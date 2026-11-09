@@ -15,4 +15,5 @@ dependencies:
   - pdb2pqr
   - pytest
 pip:
+  - --pre
   - seamless-suite
