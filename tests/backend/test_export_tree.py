@@ -43,6 +43,9 @@ def _complete_tree_snapshot():
     snapshot["range_pdb_files"]["range-1.pdb"] = (
         b"REMARK exact prepared raw RNA range\r\nEND\r\n"
     )
+    # anchor-refe-bases.pdb reads base atoms from the reference, so B4/B3's
+    # synthetic range 1 carries complete nucleobases for every RNA position.
+    snapshot["range_pdb_files_aa"]["range-1-aa.pdb"] = _reference_pdb(snapshot["fragments"])
     snapshot["reference_pdb"] = snapshot["range_pdb_files_aa"]["range-1-aa.pdb"]
     snapshot["reference_sha256"] = hashlib.sha256(snapshot["reference_pdb"]).hexdigest()
 
@@ -62,7 +65,60 @@ def _complete_tree_snapshot():
             f"REMARK exact kept bestfit fragment {number}\r\nEND\r\n".encode("ascii")
         )
     snapshot["clipped_fragments"] = clipped
+    snapshot["best_fit_statistics"] = _best_fit_statistics(snapshot)
     return snapshot
+
+
+def _rna_residues(fragments):
+    residues = [row["residues"][0] for row in fragments]
+    residues.append(fragments[-1]["residues"][1])
+    return residues
+
+
+def _reference_pdb(fragments):
+    lines = ["REMARK exact prepared RNA with complete nucleobases"]
+    serial = 0
+    for residue in _rna_residues(fragments):
+        for name in ("P", "C1'", *export_snapshot.ANCHOR_REFE_BASE_ATOMS[residue["base"]], "O3'"):
+            serial += 1
+            atom_name = f" {name:<3}"
+            lines.append(
+                f"ATOM  {serial:5d} {atom_name} {'R' + residue['base']:>3} A{residue['resid']:4d}    "
+                f"{serial * 0.5:8.3f}{serial * -0.25:8.3f}{serial * 0.125:8.3f}  1.00  0.00"
+                f"           {name[0]}"
+            )
+    lines.append("END")
+    return ("\r\n".join(lines) + "\r\n").encode("ascii")
+
+
+def _best_fit_statistics(snapshot):
+    """Synthetic normalised statistics; normalisation itself is tested in E2."""
+    bases = {row["fragment"]: row for row in snapshot["threshold_bases"]}
+    energies = {(row["fragment"], row["range"]): row["energy"] for row in snapshot["energy_cells"]}
+    protein_ranges = [f"range-{index}" for index in range(2, len(snapshot["range_specs"]["rows"]) + 1)]
+    fragments = []
+    for fragment in snapshot["kept_fragments"]:
+        base = bases[fragment["number"]]
+        fragment_energies = {}
+        for range_id in protein_ranges:
+            energy = energies.get((fragment["key"], range_id))
+            fragment_energies[range_id] = (
+                {"energy": energy, "error": None} if energy is not None
+                else {"energy": None, "error": "fixture scoring error"}
+            )
+        fragments.append({
+            "fragment": fragment["key"], "rmsd": fragment["number"] / 10,
+            **{name: base[name] for name in ("nuc1_ovrmsd_raw", "nuc1_ovrmsd",
+                                             "nuc2_ovrmsd_raw", "nuc2_ovrmsd")},
+            "energies": fragment_energies,
+        })
+    pairs = [
+        {"down": pair["down"], "up": pair["up"], "sequence": pair["sequence"],
+         "crmsd_raw": pair["crmsd_raw"], "crmsd_computed": pair["crmsd"], "crmsd": pair["crmsd"],
+         "ovrmsd_raw": pair["ovrmsd_raw"], "ovrmsd_computed": pair["ovrmsd"], "ovrmsd": pair["ovrmsd"]}
+        for pair in snapshot["kept_pairs"]
+    ]
+    return {"schema": 1, "fragments": fragments, "pairs": pairs}
 
 
 @pytest.fixture
@@ -107,6 +163,8 @@ def _expected_data_paths(snapshot):
         "DATA/energy-thresholds.json",
         "DATA/score-filter.yaml",
         "DATA/export-manifest.json",
+        "DATA/best-fit-statistics.json",
+        "DATA/anchor-refe-bases.pdb",
     }
     paths.update(f"DATA/{name}" for name in snapshot["range_pdb_files"])
     paths.update(f"DATA/{name}" for name in snapshot["range_pdb_files_aa"])
@@ -150,6 +208,80 @@ def test_render_tree_has_exact_members_and_preserves_prepared_bytes(tree_inputs)
                for number in set(range(1, 12)) - kept_numbers)
     assert "DATA/clipped-fragments/clip.json" not in tree
     assert "DATA/clipped-fragments/thresholds.json" not in tree
+
+
+def test_best_fit_statistics_member_is_the_normalised_kept_table(tree_inputs):
+    snapshot, recipes, digest = tree_inputs
+    tree = _render(snapshot, recipes, digest)
+    statistics = _json_member(tree, "DATA/best-fit-statistics.json")
+    assert statistics == snapshot["best_fit_statistics"]
+    assert [row["fragment"] for row in statistics["fragments"]] \
+        == [row["key"] for row in snapshot["kept_fragments"]]
+    assert [(row["down"], row["up"]) for row in statistics["pairs"]] \
+        == [(row["down"], row["up"]) for row in snapshot["kept_pairs"]]
+
+    stale = deepcopy(snapshot)
+    stale["best_fit_statistics"]["fragments"].pop()
+    with pytest.raises(ValueError, match="kept fragments"):
+        _render(stale, recipes, export_snapshot.snapshot_digest(stale))
+
+
+def test_anchor_refe_bases_pdb_holds_verbatim_reference_bases_of_every_candidate(tree_inputs):
+    snapshot, recipes, digest = tree_inputs
+    tree = _render(snapshot, recipes, digest)
+    text = tree["DATA/anchor-refe-bases.pdb"].decode("utf-8")
+    assert text.endswith("END\n") and "\r" not in text
+
+    candidates = {}
+    for recipe in recipes:
+        for action in recipe["actions"]:
+            parameters = action["parameters"]
+            if parameters["action"] == "anchor-refe":
+                candidates[(parameters["fragment"], parameters["nucleotide"])] = parameters["ovrmsd"]
+    assert candidates
+    positions = sorted({number + (nucleotide == "second") for number, nucleotide in candidates})
+
+    residues = _rna_residues(snapshot["fragments"])
+    reference_lines = snapshot["reference_pdb"].decode("ascii").split("\r\n")
+    expected_atoms = []
+    for position in positions:
+        residue = residues[position - 1]
+        for name in export_snapshot.ANCHOR_REFE_BASE_ATOMS[residue["base"]]:
+            expected_atoms.extend(
+                line for line in reference_lines
+                if line.startswith("ATOM") and int(line[22:26]) == residue["resid"]
+                and line[12:16].strip() == name
+            )
+    assert [line for line in text.splitlines() if line.startswith("ATOM")] == expected_atoms
+
+    remarks = [line for line in text.splitlines() if line.startswith("REMARK   2 ")]
+    assert [int(line.split()[4]) for line in remarks] == positions
+    keys = {row["number"]: row["key"] for row in snapshot["fragments"]}
+    for (number, nucleotide), threshold in candidates.items():
+        position = number + (nucleotide == "second")
+        remark = remarks[positions.index(position)]
+        assert f"{keys[number]} {nucleotide} ovrmsd {threshold}" in remark
+
+
+def test_anchor_refe_bases_pdb_rejects_a_reference_missing_a_base_atom(tree_inputs):
+    snapshot, recipes, _digest = tree_inputs
+    changed = deepcopy(snapshot)
+    reference = changed["reference_pdb"].decode("ascii").split("\r\n")
+    position = next(
+        action["parameters"]["fragment"]
+        for recipe in recipes for action in recipe["actions"]
+        if action["parameters"]["action"] == "anchor-refe"
+        and action["parameters"]["nucleotide"] == "first"
+    )
+    resid = _rna_residues(changed["fragments"])[position - 1]["resid"]
+    reference = [line for line in reference
+                 if not (line.startswith("ATOM") and int(line[22:26]) == resid
+                         and line[12:16].strip() == "C5")]
+    changed["reference_pdb"] = "\r\n".join(reference).encode("ascii")
+    changed["range_pdb_files_aa"]["range-1-aa.pdb"] = changed["reference_pdb"]
+    changed["reference_sha256"] = hashlib.sha256(changed["reference_pdb"]).hexdigest()
+    with pytest.raises(ValueError, match="lacks base atom C5"):
+        _render(changed, recipes, export_snapshot.snapshot_digest(changed))
 
 
 def test_constraints_energy_and_score_filter_members_follow_schema(tree_inputs):

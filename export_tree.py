@@ -396,6 +396,75 @@ def _disabled_reference_anchors(snapshot: dict, recipes: list[dict]) -> list[dic
     return result
 
 
+def _best_fit_statistics(snapshot: dict) -> dict:
+    """Return the normalised best-fit statistics after checking their addresses."""
+    statistics = snapshot.get("best_fit_statistics")
+    kept = snapshot.get("kept_fragments")
+    pairs = snapshot.get("kept_pairs")
+    if type(statistics) is not dict or statistics.get("schema") != 1 \
+            or set(statistics) != {"schema", "fragments", "pairs"} \
+            or not isinstance(statistics.get("fragments"), list) \
+            or not isinstance(statistics.get("pairs"), list) \
+            or not isinstance(kept, list) or not isinstance(pairs, list):
+        raise ValueError("The snapshot has no schema-1 best-fit statistics.")
+    if [row.get("fragment") if type(row) is dict else None for row in statistics["fragments"]] \
+            != [row.get("key") if type(row) is dict else None for row in kept]:
+        raise ValueError("Best-fit statistics do not list exactly the kept fragments.")
+    if [(row.get("down"), row.get("up")) if type(row) is dict else None for row in statistics["pairs"]] \
+            != [(row.get("down"), row.get("up")) if type(row) is dict else None for row in pairs]:
+        raise ValueError("Best-fit statistics do not list exactly the kept pairs.")
+    return statistics
+
+
+def _anchor_refe_bases_pdb(snapshot: dict, recipes: list[dict]) -> bytes:
+    """Render the reference nucleobases that the catalogue's anchor-refe actions fit.
+
+    One residue per anchored RNA position, holding the base atom records
+    copied verbatim from ``reference.pdb`` in Alaric's template order.  A
+    REMARK before each residue names the anchor-refe candidates that use it.
+    """
+    fragments = snapshot.get("fragments")
+    if not isinstance(fragments, list):
+        raise ValueError("The snapshot has no fragment table.")
+    keys_by_number = {row.get("number"): row.get("key") for row in fragments if type(row) is dict}
+    candidates: dict[tuple[int, str], Any] = {}
+    for recipe in recipes:
+        for action in recipe["actions"]:
+            parameters = action.get("parameters")
+            if type(parameters) is not dict or parameters.get("action") != "anchor-refe":
+                continue
+            number, nucleotide = parameters.get("fragment"), parameters.get("nucleotide")
+            if type(number) is not int or number not in keys_by_number \
+                    or nucleotide not in ("first", "second"):
+                raise ValueError(f"Malformed anchor-refe action in {recipe['path']}/{action['name']}.")
+            threshold = parameters.get("ovrmsd")
+            previous = candidates.setdefault((number, nucleotide), threshold)
+            if previous != threshold:
+                raise ValueError(f"Conflicting anchor-refe ovRMSD for frag{number}/{nucleotide}.")
+    by_position: dict[int, list[str]] = {}
+    for (number, nucleotide), threshold in sorted(candidates.items()):
+        position = number + (0 if nucleotide == "first" else 1)
+        by_position.setdefault(position, []).append(
+            f"{keys_by_number[number]} {nucleotide} ovrmsd {threshold}"
+        )
+    bases = export_snapshot.reference_nucleobases(
+        _checked_bytes(snapshot.get("reference_pdb"), "reference.pdb"), fragments, by_position,
+    )
+    lines = [
+        "REMARK   1 NUCLEOBASE ATOMS FITTED BY ANCHOR-REFE, COPIED FROM DATA/reference.pdb",
+        "REMARK   1 ATOM ORDER FOLLOWS THE ALARIC MONONUCLEOTIDE TEMPLATES",
+    ]
+    for position in sorted(by_position):
+        residue = bases[position]["residue"]
+        lines.append(
+            f"REMARK   2 RNA POSITION {position} ({residue['base']} {residue['chain']} "
+            f"{residue['resid']}{residue['insertion_code']}): " + "; ".join(by_position[position])
+        )
+        lines.extend(bases[position]["lines"])
+    lines.append("END")
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
 def _manifest(snapshot: dict, recipes: list[dict], digest: str) -> dict:
     if not isinstance(snapshot.get("range_specs"), dict) or not isinstance(snapshot.get("handoff"), dict) \
             or not isinstance(snapshot.get("class_table"), list):
@@ -503,6 +572,9 @@ def render_tree(snapshot: Any, recipes: Any, digest: Any) -> dict[str, bytes]:
             if type(parameters) is not dict or not isinstance(parameters.get("action"), str):
                 raise ValueError(f"Malformed action mapping in {recipe['path']}/{action['name']}.")
             _add_member(tree, action_path, _yaml_bytes(parameters, comments))
+
+    _add_member(tree, "DATA/best-fit-statistics.json", _json_bytes(_best_fit_statistics(snapshot)))
+    _add_member(tree, "DATA/anchor-refe-bases.pdb", _anchor_refe_bases_pdb(snapshot, checked_recipes))
 
     manifest = _manifest(snapshot, checked_recipes, digest)
     _add_member(tree, "DATA/export-manifest.json", _json_bytes(manifest))

@@ -35,8 +35,8 @@ GAUSSIAN_NAMES = [
     "rrm90-disp45", "rrm90-tilt30-disp45", "rrm95", "rrm95-tilt30",
     "rrm95-disp45", "rrm95-tilt30-disp45",
 ]
-DIGEST_GOLDEN_EXPORTER_VERSION = 1
-DIGEST_GOLDEN_SHA256 = "b812d8cdfef738bec3d8710a93041b021b56632975a09be948dca227a31ed3ac"
+DIGEST_GOLDEN_EXPORTER_VERSION = 2
+DIGEST_GOLDEN_SHA256 = "508508a364893bd691cb1051924c6a004457b18c9b532a4118ea65ed940a2ab7"
 
 
 @pytest.fixture(autouse=True)
@@ -67,6 +67,25 @@ def _pdb(label):
     return (f"REMARK E2 fixture {label}\r\n"
             "ATOM      1  P     A A 101       0.000   0.000   0.000  1.00  0.00           P\r\n"
             "END\r\n").encode("ascii")
+
+
+def _rna_pdb(label):
+    """A prepared-RNA fixture with complete base atoms for every residue in RESIDUES."""
+    lines = [f"REMARK E2 fixture {label}"]
+    serial = 0
+    for residue in RESIDUES:
+        names = ("P", "C1'", *export_snapshot.ANCHOR_REFE_BASE_ATOMS[residue["base"]])
+        for name in names:
+            serial += 1
+            element = name[0]
+            atom_name = f" {name:<3}" if len(name) < 4 else name
+            lines.append(
+                f"ATOM  {serial:5d} {atom_name} {'R' + residue['base']:>3} A{residue['resid']:4d}    "
+                f"{serial * 0.5:8.3f}{serial * -0.25:8.3f}{serial * 0.125:8.3f}  1.00  0.00"
+                f"           {element}"
+            )
+    lines.append("END")
+    return ("\r\n".join(lines) + "\r\n").encode("ascii")
 
 
 def _inputs():
@@ -209,7 +228,7 @@ def _inputs():
         "pairs": [{"down": 1, "up": 2, "sequence": "ACG",
                    "ovrmsd": "0.13", "crmsd": "0.13"}],
     }
-    reference_bytes = _pdb("reference")
+    reference_bytes = _rna_pdb("reference")
     protein_bytes = _pdb("protein")
     range_pdbs_aa = {
         "schema": 1, "pdb_code": "1b7f", "range_specs": deepcopy(RANGE_SPECS),
@@ -672,3 +691,112 @@ def test_e2_validator_null_pins_and_view_state_are_excluded_from_snapshot_identi
     inputs["stage4_active_nucleotide"] = 3
     changed_snapshot = _normalised(inputs)
     assert export_snapshot.snapshot_digest(changed_snapshot) == export_snapshot.snapshot_digest(snapshot)
+
+
+def test_best_fit_statistics_collect_kept_rmsd_energies_and_pair_values():
+    inputs = _inputs()
+    inputs["energetics"]["ranges"][0]["rows"][0]["bestfit"]["energy"] = -1.5
+    snapshot = _normalised(inputs)
+    expected_energies = [{"range-2": {"energy": -1.5, "error": None}},
+                         {"range-2": {"energy": -2.0, "error": None}}]
+    statistics = snapshot["best_fit_statistics"]
+    assert statistics == {
+        "schema": 1,
+        "fragments": [
+            {"fragment": "frag-1-AC", "rmsd": 0.1,
+             "nuc1_ovrmsd_raw": 0.1999, "nuc1_ovrmsd": "0.20",
+             "nuc2_ovrmsd_raw": 2.249999, "nuc2_ovrmsd": "2.25",
+             "energies": expected_energies[0]},
+            {"fragment": "frag-2-CG", "rmsd": 0.2,
+             "nuc1_ovrmsd_raw": 0.1999, "nuc1_ovrmsd": "0.20",
+             "nuc2_ovrmsd_raw": 0.2999, "nuc2_ovrmsd": "0.30",
+             "energies": expected_energies[1]},
+        ],
+        "pairs": [
+            {"down": 1, "up": 2, "sequence": "ACG",
+             "crmsd_raw": 0.129995, "crmsd_computed": "0.13", "crmsd": "0.13",
+             "ovrmsd_raw": 0.130001, "ovrmsd_computed": "0.14", "ovrmsd": "0.13"},
+        ],
+    }
+
+
+def test_best_fit_statistics_keep_a_scoring_error_of_a_non_interacting_cell():
+    # A false matrix cell may carry a scoring error instead of an energy.
+    inputs = _inputs()
+    inputs["energetics"]["ranges"][0]["rows"][1]["bestfit"] = {"energy": None, "error": "minimisation failed"}
+    statistics = export_snapshot._best_fit_statistics(
+        inputs["best_fits"], inputs["energetics"], inputs["best_fit_thresholds"],
+        [row for row in inputs["fragments"]["fragments"]], [],
+    )
+    assert [row["energies"] for row in statistics["fragments"]] == [
+        {"range-2": {"energy": -1.0, "error": None}},
+        {"range-2": {"energy": None, "error": "minimisation failed"}},
+    ]
+    assert statistics["pairs"] == []
+
+
+def test_best_fit_statistics_block_a_kept_fragment_without_finite_rmsd():
+    inputs = _inputs()
+    inputs["best_fits"]["rows"][1]["rmsd"] = float("nan")
+    snapshot, blocks = export_snapshot.normalise_export_inputs(inputs)
+    assert snapshot is None
+    assert [(block["code"], block["address"]) for block in blocks] == [("best-fit-rmsd", "frag-2-CG")]
+
+
+def _replace_reference(inputs, reference):
+    inputs["rna_pdb"] = reference
+    inputs["range_pdb_files_aa"]["range-1-aa.pdb"] = reference
+    inputs["range_pdbs_aa"]["pdbs"][0]["pdb"] = reference.decode("ascii")
+
+
+@pytest.mark.parametrize("change", ["missing-atom", "duplicate-atom", "shifted-residue", "wrong-base"])
+def test_reference_nucleobases_block_an_unusable_anchor_refe_reference(change):
+    inputs = _inputs()
+    lines = inputs["rna_pdb"].decode("ascii").split("\r\n")
+    if change == "missing-atom":
+        lines = [line for line in lines if not (line[22:26] == " 102" and line[12:16] == " N4 ")]
+        message = "lacks base atom N4"
+    elif change == "duplicate-atom":
+        lines.insert(lines.index(next(line for line in lines if line[12:16] == " N4 ")),
+                     next(line for line in lines if line[12:16] == " N4 "))
+        message = "repeats base atom N4"
+    elif change == "shifted-residue":
+        lines = [line for line in lines if line[22:26] != " 101"]
+        message = "not A A 101"
+    else:
+        lines = [line.replace(" RC A 102", " RU A 102") for line in lines]
+        message = "not C A 102"
+    _replace_reference(inputs, "\r\n".join(lines).encode("ascii"))
+    snapshot, blocks = export_snapshot.normalise_export_inputs(inputs)
+    assert snapshot is None
+    assert len(blocks) == 1 and blocks[0]["code"] == "reference-nucleobase"
+    assert message in blocks[0]["message"]
+
+
+def test_reference_nucleobases_return_verbatim_records_in_template_order():
+    reference = _rna_pdb("reference")
+    fragments = _inputs()["fragments"]["fragments"]
+    bases = export_snapshot.reference_nucleobases(reference, fragments, [3, 2])
+    assert list(bases) == [2, 3]
+    assert bases[3]["residue"] == RESIDUES[2]
+    source = reference.decode("ascii").split("\r\n")
+    assert [line[12:16].strip() for line in bases[3]["lines"]] \
+        == list(export_snapshot.ANCHOR_REFE_BASE_ATOMS["G"])
+    assert all(line in source for line in bases[3]["lines"])
+
+
+def test_anchor_refe_base_atoms_mirror_alaric_only_base_template_selection():
+    np = pytest.importorskip("numpy")
+    from alaric_dir import resolve_alaric_repo_root
+
+    try:
+        templates = resolve_alaric_repo_root() / "fraglib" / "templates"
+    except FileNotFoundError:
+        pytest.skip("The Alaric checkout is not available.")
+    if not templates.is_dir():
+        pytest.skip("The Alaric fragment-library templates are not available.")
+    for base, names in export_snapshot.ANCHOR_REFE_BASE_ATOMS.items():
+        template = np.load(templates / f"{base}-ppdb.npy", allow_pickle=False)
+        # Alaric's Library.create(only_base=True): template atoms with two-character names.
+        expected = tuple(name.decode() for name in template["name"] if len(name.decode()) == 2)
+        assert names == expected, base

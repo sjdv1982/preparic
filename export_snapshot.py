@@ -15,7 +15,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 
-EXPORTER_VERSION = 1
+EXPORTER_VERSION = 2
 ANCHOR_MIN_CELL_FRACTION = 1.0 / 3.0
 L_OV = math.sqrt(3.0)
 
@@ -30,6 +30,18 @@ _RING_PINS = (
 _VALIDATOR_PINS = (
     "validated_pairs", "validated_classes", "validated_energies",
 )
+
+# Mirror of the atoms Alaric's anchor-refe fits: ``library.create(only_base=True)``
+# keeps the mononucleotide template atoms whose names have two characters, in
+# template order (``fraglib/templates/<base>-ppdb.npy``).  These are the base
+# ring atoms plus their in-plane exocyclic substituents.  Preparic does not
+# import Alaric; a parity test compares this table with the installed templates.
+ANCHOR_REFE_BASE_ATOMS = {
+    "A": ("N9", "C4", "N3", "C2", "N1", "C6", "N6", "C5", "N7", "C8"),
+    "C": ("N1", "C6", "C2", "O2", "N3", "C4", "N4", "C5"),
+    "G": ("N9", "C4", "N3", "C2", "N2", "N1", "C6", "O6", "C5", "N7", "C8"),
+    "U": ("N1", "C6", "C2", "O2", "N3", "C4", "O4", "C5"),
+}
 
 
 class ExportNotReady(Exception):
@@ -99,6 +111,82 @@ def snapshot_digest(snapshot: Any) -> str:
     """Return the canonical SHA-256 identity for a normalised snapshot."""
     payload = {"exporter_version": EXPORTER_VERSION, "snapshot": _digest_value(snapshot)}
     return hashlib.sha256(_canonical_json(payload)).hexdigest()
+
+
+def _reference_residues(reference: bytes) -> list[dict]:
+    """Group the first model's atom records of a PDB into residues, in file order."""
+    try:
+        text = reference.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("The reference PDB is not UTF-8 text.") from exc
+    residues: list[dict] = []
+    current = None
+    for line in text.splitlines():
+        record = line[:6]
+        if record == "ENDMDL":
+            break
+        if record not in ("ATOM  ", "HETATM"):
+            continue
+        if len(line) < 54:
+            raise ValueError(f"The reference PDB has a truncated atom record: {line!r}.")
+        identity = (line[21], line[22:26].strip(), line[26].strip())
+        if identity != current:
+            residues.append({"resname": line[17:20].strip(), "resid": line[22:26].strip(),
+                             "insertion_code": line[26].strip(), "lines": []})
+            current = identity
+        residues[-1]["lines"].append(line)
+    return residues
+
+
+def _canonical_reference_base(resname: str) -> str | None:
+    name = resname.strip().upper()
+    if len(name) == 2 and name[0] in {"R", "D"}:
+        name = name[1]
+    return name if name in ANCHOR_REFE_BASE_ATOMS else None
+
+
+def reference_nucleobases(reference: bytes, fragments: list[dict], positions: Any) -> dict[int, dict]:
+    """Return the anchor-refe reference nucleobase at each 1-based RNA position.
+
+    Alaric's anchor-refe counts nucleotides from the first residue of the
+    reference and fits the base atoms of ``ANCHOR_REFE_BASE_ATOMS`` in that
+    order.  Each result holds the Preparic residue identity and the matching
+    atom records, copied verbatim from the reference (without line endings).
+    Raises ``ValueError`` when the reference residue at a position is not the
+    expected fragment residue or lacks a unique base atom.
+    """
+    by_number = {row.get("number"): row for row in fragments if _is_record(row)}
+    residues = _reference_residues(reference)
+    result: dict[int, dict] = {}
+    for position in sorted(set(positions)):
+        if not _is_int(position) or position < 1:
+            raise ValueError(f"Invalid RNA position {position!r}.")
+        if position in by_number:
+            expected = by_number[position]["residues"][0]
+        elif position - 1 in by_number:
+            expected = by_number[position - 1]["residues"][1]
+        else:
+            raise ValueError(f"RNA position {position} is not covered by a fragment.")
+        label = f"{expected['chain']} {expected['resid']}{expected['insertion_code']}"
+        if position > len(residues):
+            raise ValueError(f"The reference PDB has no nucleotide at position {position} ({label}).")
+        residue = residues[position - 1]
+        if residue["resid"] != str(expected["resid"]) \
+                or residue["insertion_code"] != expected["insertion_code"] \
+                or _canonical_reference_base(residue["resname"]) != expected["base"]:
+            raise ValueError(
+                f"Reference nucleotide {position} is {residue['resname']} {residue['resid']}"
+                f"{residue['insertion_code']}, not {expected['base']} {label}."
+            )
+        lines = []
+        for name in ANCHOR_REFE_BASE_ATOMS[expected["base"]]:
+            matches = [line for line in residue["lines"] if line[12:16].strip() == name]
+            if len(matches) != 1:
+                problem = "lacks" if not matches else "repeats"
+                raise ValueError(f"Reference nucleotide {label} {problem} base atom {name}.")
+            lines.append(matches[0])
+        result[position] = {"residue": dict(expected), "lines": lines}
+    return result
 
 
 def _range_id(number: int) -> str:
@@ -1076,6 +1164,72 @@ def _validate_clipped_pdbs(clipped: Any, kept_fragments: list[dict], best_fits: 
     return result
 
 
+def _best_fit_statistics(best_fits: dict, energetics: dict, computed: dict,
+                         kept_fragments: list[dict], kept_pairs: list[dict]) -> dict:
+    """Collect the kept fragments' best-fit statistics for the archive.
+
+    Per fragment: the best-fit RMSD, the computed per-nucleotide base ovRMSDs
+    and the best fit's ATTRACT energy against every protein range.  Per kept
+    pair: the raw and computed (rounded) cRMSD/ovRMSD and the edited values
+    that ``constraints.json`` exports.
+    """
+    fit_by_key = {row.get("key"): row for row in best_fits["rows"] if _is_record(row)}
+    bases_by_number = {row.get("fragment"): row for row in computed["bases"] if _is_record(row)}
+    computed_pairs = {(row.get("down"), row.get("up")): row
+                      for row in computed["pairs"] if _is_record(row)}
+    energy_ranges = []
+    for range_row in energetics["ranges"]:
+        range_id = range_row.get("range")
+        match = re.fullmatch(r"range-([1-9][0-9]*)", range_id) if isinstance(range_id, str) else None
+        if match is None:
+            _problem("energetics-range", None, "An energetics range has an invalid address.",
+                     "Recompute stage 5 energetics.")
+        rows = {row.get("key"): row for row in range_row["rows"] if _is_record(row)}
+        energy_ranges.append((int(match.group(1)), range_id, rows))
+    energy_ranges.sort()
+
+    fragments = []
+    for fragment in kept_fragments:
+        key = fragment["key"]
+        fit = fit_by_key.get(key)
+        if not _is_record(fit) or not _is_finite_number(fit.get("rmsd")):
+            _problem("best-fit-rmsd", key, "The kept fragment has no finite best-fit RMSD.",
+                     "Recompute best fits for the current prepared RNA.")
+        bases = bases_by_number.get(fragment["number"])
+        energies = {}
+        for _number, range_id, rows in energy_ranges:
+            row = rows.get(key)
+            bestfit = row.get("bestfit") if _is_record(row) else None
+            if not _is_record(bestfit):
+                _problem("energy-result", f"{key}/{range_id}",
+                         f"Energetics for {range_id} have no best-fit row for {key}.",
+                         "Recompute stage 5 energetics for the current fragment map.")
+            energy, error = bestfit.get("energy"), bestfit.get("error")
+            if (energy is not None and not _is_finite_number(energy)) \
+                    or (error is not None and not isinstance(error, str)):
+                _problem("energy-result", f"{key}/{range_id}",
+                         f"The best-fit energy for {range_id} is malformed.",
+                         "Recompute stage 5 energetics.")
+            energies[range_id] = {"energy": None if energy is None else float(energy), "error": error}
+        fragments.append({
+            "fragment": key,
+            "rmsd": float(fit["rmsd"]),
+            "nuc1_ovrmsd_raw": bases["nuc1_ovrmsd_raw"], "nuc1_ovrmsd": bases["nuc1_ovrmsd"],
+            "nuc2_ovrmsd_raw": bases["nuc2_ovrmsd_raw"], "nuc2_ovrmsd": bases["nuc2_ovrmsd"],
+            "energies": energies,
+        })
+
+    pairs = []
+    for pair in kept_pairs:
+        source = computed_pairs[(pair["down"], pair["up"])]
+        pairs.append({
+            "down": pair["down"], "up": pair["up"], "sequence": pair["sequence"],
+            "crmsd_raw": pair["crmsd_raw"], "crmsd_computed": source["crmsd"], "crmsd": pair["crmsd"],
+            "ovrmsd_raw": pair["ovrmsd_raw"], "ovrmsd_computed": source["ovrmsd"], "ovrmsd": pair["ovrmsd"],
+        })
+    return {"schema": 1, "fragments": fragments, "pairs": pairs}
+
+
 def _stage6_gate(inputs: dict) -> list[dict]:
     """Apply project-state's persisted-decision stage prefix before deep checks."""
     def not_ready(stage: int, address: str | None = None) -> list[dict]:
@@ -1312,6 +1466,15 @@ def _build_snapshot(inputs: dict) -> tuple[dict | None, list[dict]]:
     )
     gaussian = _validate_gaussian(inputs, selected, inputs["best_fits"], clip, range_rows, model)
 
+    statistics = _best_fit_statistics(inputs["best_fits"], inputs["energetics"],
+                                      inputs["best_fit_thresholds"], kept_fragments, kept_pairs)
+    kept_positions = {fragment["number"] + offset for fragment in kept_fragments for offset in (0, 1)}
+    try:
+        reference_nucleobases(reference_bytes, fragment_rows, kept_positions)
+    except ValueError as exc:
+        _problem("reference-nucleobase", "range-1", str(exc),
+                 "Recompute the prepared all-atom RNA so that every kept nucleotide has complete base atoms.")
+
     expected_selected_keys = sorted(row["key"] for row in selected_stackings)
     if expected_selected_keys != selected:
         _problem("selected-stackings", None, "Selected stacking identities could not be resolved exactly.",
@@ -1346,6 +1509,7 @@ def _build_snapshot(inputs: dict) -> tuple[dict | None, list[dict]]:
         "fraglib_identities": gaussian["library"],
         "ring_references": gaussian["rings"],
         "minimum_cell_fraction": gaussian["min_cell_fraction"],
+        "best_fit_statistics": statistics,
     }
     return snapshot, blocks
 
